@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.env
+*.log
+.DS_Store
+
+# AnyClick specific exclusions
+browser-worker/profiles/
+browser-worker/dist/
+n8n/.env
+profiles/
+failures/

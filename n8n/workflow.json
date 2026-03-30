@@ -1,0 +1,212 @@
+{
+  "name": "AnyClick Browser Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "goal", "name": "goal", "value": "={{ $json.goal }}", "type": "string" },
+            { "id": "target_url", "name": "target_url", "value": "={{ $json.url }}", "type": "string" },
+            { "id": "max_steps", "name": "max_steps", "value": 20, "type": "number" },
+            { "id": "engine", "name": "engine", "value": "playwright", "type": "string" },
+            { "id": "step", "name": "step", "value": 0, "type": "number" }
+          ]
+        }
+      },
+      "id": "set-task",
+      "name": "Set Task Metadata",
+      "type": "n8n-nodes-base.set",
+      "position": [240, 300],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/start",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "taskId", "value": "={{ $execution.id }}" },
+            { "name": "url", "value": "={{ $json.target_url }}" },
+            { "name": "engine", "value": "={{ $json.engine }}" },
+            { "name": "visible", "value": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "start-session",
+      "name": "Start Browser Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 300],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3001/state?sessionId={{ $('Start Browser Session').first().json.sessionId }}",
+        "options": {}
+      },
+      "id": "get-state",
+      "name": "Get Page State",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/plan",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "sessionId", "value": "={{ $('Start Browser Session').first().json.sessionId }}" },
+            { "name": "goal", "value": "={{ $('Set Task Metadata').first().json.goal }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gemini-plan",
+      "name": "Gemini — Plan Next Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action.action }}",
+              "operation": "equal",
+              "value2": "done"
+            }
+          ]
+        }
+      },
+      "id": "check-done",
+      "name": "Done?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action.action }}",
+              "operation": "equal",
+              "value2": "request_login"
+            }
+          ]
+        }
+      },
+      "id": "check-login",
+      "name": "Login Required?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 500],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/act",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "sessionId", "value": "={{ $('Start Browser Session').first().json.sessionId }}" },
+            { "name": "action", "value": "={{ $json.action }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "execute-action",
+      "name": "Execute Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 300],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/request-login",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "sessionId", "value": "={{ $('Start Browser Session').first().json.sessionId }}" },
+            { "name": "site", "value": "={{ $('Get Page State').first().json.state.url }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "trigger-login",
+      "name": "Trigger Login Prompt",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 500],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "unit": "seconds",
+        "value": 5
+      },
+      "id": "wait-after-login",
+      "name": "Wait After Login",
+      "type": "n8n-nodes-base.wait",
+      "position": [1560, 500],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Set Task Metadata": {
+      "main": [
+        [ { "node": "Start Browser Session", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Start Browser Session": {
+      "main": [
+        [ { "node": "Get Page State", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Get Page State": {
+      "main": [
+        [ { "node": "Gemini — Plan Next Action", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Gemini — Plan Next Action": {
+      "main": [
+        [ { "node": "Done?", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Done?": {
+      "main": [
+        [],
+        [ { "node": "Login Required?", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Login Required?": {
+      "main": [
+        [ { "node": "Trigger Login Prompt", "type": "main", "index": 0 } ],
+        [ { "node": "Execute Action", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Execute Action": {
+      "main": [
+        [ { "node": "Get Page State", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Trigger Login Prompt": {
+      "main": [
+        [ { "node": "Wait After Login", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Wait After Login": {
+      "main": [
+        [ { "node": "Get Page State", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
