@@ -20,9 +20,32 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
     try {
       // Ping the page to ensure the browser wasn't closed by the user
       await page.title();
+      
+      // Secondary check: verify context pages array isn't empty (browser might be in a weird detached state)
+      const pages = context.pages();
+      if (pages.length === 0) {
+          throw new Error('No pages left in context');
+      }
+      
       return { context, page };
     } catch {
-      log.warn('Browser was closed externally. Rebooting the context...');
+      log.warn('Browser or active page was closed externally. Attempting to recover existing context or rebooting...');
+      
+      try {
+        if (context) {
+           const pages = context.pages();
+           if (pages.length > 0) {
+               page = pages[0];
+               return { context, page };
+           } else {
+               page = await context.newPage();
+               return { context, page };
+           }
+        }
+      } catch {
+         // Context is totally dead
+      }
+
       context = null;
       page = null;
     }
@@ -52,12 +75,14 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
   // Use existing page or open a new one
   const pages = context.pages();
   if (pages.length > 0) {
-    // Return the first valid page and optionally close extra empty ones created on launch
+    // Return the first valid page
     page = pages[0];
     
-    // Sometimes Chrome opens a "New Tab" alongside our requested tab
-    if (pages.length > 1 && pages[1].url() === 'about:blank') {
-      await pages[1].close().catch(() => {});
+    // Close any *additional* empty tabs that spawned during launch to prevent bloat
+    for (let i = 1; i < pages.length; i++) {
+        if (pages[i].url() === 'about:blank' || pages[i].url() === 'chrome://newtab/') {
+            await pages[i].close().catch(() => {});
+        }
     }
   } else {
     page = await context.newPage();
