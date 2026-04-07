@@ -232,9 +232,11 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
         } else if (action === 'type') {
            await pw.type(step.selector, valueToType);
         } else if (action === 'click') {
-           await page.locator(step.selector).first().click({ timeout: 2500 }).catch(async () => {
-              await page.locator(step.selector!).first().dispatchEvent('click').catch(async () => {
-                 await page.locator(step.selector!).first().click({ force: true, timeout: 1500 });
+           const loc = page.locator(step.selector!).first();
+           await loc.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
+           await loc.click({ timeout: 2000 }).catch(async () => {
+              await loc.click({ force: true, timeout: 1500 }).catch(async () => {
+                 await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
               });
            });
            await pw.waitForChange(500);

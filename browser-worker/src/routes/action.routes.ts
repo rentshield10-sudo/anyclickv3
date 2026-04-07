@@ -242,10 +242,12 @@ async function executeDirectPageAction(
   await locator.scrollIntoViewIfNeeded({ timeout: 1200 }).catch(() => { });
 
   if (action === 'click') {
-    await locator.click({ timeout: 2500 }).catch(async () => {
-      // If standard click fails, try a DOM event click, then a force click
-      await locator.dispatchEvent('click').catch(async () => {
-         await locator.click({ force: true, timeout: 1500 });
+    // Attempt standard click
+    await locator.click({ timeout: 2000 }).catch(async () => {
+      // If Playwright strict click fails, try forcing it
+      await locator.click({ force: true, timeout: 1500 }).catch(async () => {
+         // If still fails (e.g. element is technically detached or covered), evaluate raw DOM click
+         await locator.evaluate((node: HTMLElement) => node.click()).catch(() => {});
       });
     });
     await pw.waitForChange(1200);
@@ -402,10 +404,9 @@ router.post('/test-click', async (req: Request, res: Response) => {
     }
 
     await locator.scrollIntoViewIfNeeded({ timeout: 1500 }).catch(() => { });
-    await locator.click({ timeout: 2500 }).catch(async () => {
-      // If standard click fails (often due to being "invisible" or covered by another element), force it
-      await locator.dispatchEvent('click').catch(async () => {
-         await locator.click({ force: true, timeout: 1500 });
+    await locator.click({ timeout: 2000 }).catch(async () => {
+      await locator.click({ force: true, timeout: 1500 }).catch(async () => {
+         await locator.evaluate((node: HTMLElement) => node.click()).catch(() => {});
       });
     });
 

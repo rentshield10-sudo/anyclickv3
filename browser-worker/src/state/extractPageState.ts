@@ -259,14 +259,18 @@ async function extractElements(page: Page): Promise<Element[]> {
         const ariaLabel = el.getAttribute('aria-label');
         if (ariaLabel) return `${tag}[aria-label="${ariaLabel}"]`;
 
-        // 5. role + unique text (short text only)
+        // 5. label for (specifically for inputs wrapped by labels or labels pointing to inputs)
+        const htmlFor = el.getAttribute('for');
+        if (htmlFor) return `label[for="${htmlFor}"]`;
+
+        // 6. role + unique text (short text only)
         const role = el.getAttribute('role');
         const innerText = (el.textContent || '').trim().slice(0, 50);
         if (role && innerText && innerText.length <= 40) {
           return `[role="${role}"]:has-text("${innerText.replace(/"/g, '\\"')}")`;
         }
 
-        // 6. tag + nth-of-type (always works)
+        // 7. tag + nth-of-type (always works)
         const parent = el.parentElement;
         if (parent) {
           const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
