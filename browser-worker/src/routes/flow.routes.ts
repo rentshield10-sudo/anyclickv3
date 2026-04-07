@@ -232,7 +232,12 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
         } else if (action === 'type') {
            await pw.type(step.selector, valueToType);
         } else if (action === 'click') {
-           await pw.click(step.selector);
+           await page.locator(step.selector).first().click({ timeout: 2500 }).catch(async () => {
+              await page.locator(step.selector!).first().dispatchEvent('click').catch(async () => {
+                 await page.locator(step.selector!).first().click({ force: true, timeout: 1500 });
+              });
+           });
+           await pw.waitForChange(500);
         } else if (action === 'select') {
            await pw.select(step.selector, valueToType);
         } else {

@@ -243,7 +243,10 @@ async function executeDirectPageAction(
 
   if (action === 'click') {
     await locator.click({ timeout: 2500 }).catch(async () => {
-      await locator.click({ force: true, timeout: 1500 });
+      // If standard click fails, try a DOM event click, then a force click
+      await locator.dispatchEvent('click').catch(async () => {
+         await locator.click({ force: true, timeout: 1500 });
+      });
     });
     await pw.waitForChange(1200);
     return;
@@ -400,7 +403,10 @@ router.post('/test-click', async (req: Request, res: Response) => {
 
     await locator.scrollIntoViewIfNeeded({ timeout: 1500 }).catch(() => { });
     await locator.click({ timeout: 2500 }).catch(async () => {
-      await locator.click({ force: true, timeout: 1500 });
+      // If standard click fails (often due to being "invisible" or covered by another element), force it
+      await locator.dispatchEvent('click').catch(async () => {
+         await locator.click({ force: true, timeout: 1500 });
+      });
     });
 
     await pw.waitForChange(1200);
