@@ -9,6 +9,7 @@ const ConfigSchema = z.object({
   GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
   GEMINI_PRO_MODEL: z.string().default('gemini-2.5-pro'),
   DEBUG_OVERLAY: z.coerce.boolean().default(false),
+  DEMO_MODE: z.coerce.boolean().default(false),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
 });
 

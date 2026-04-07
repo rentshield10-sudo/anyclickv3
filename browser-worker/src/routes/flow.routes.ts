@@ -230,8 +230,10 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
                await pw.waitForChange(timeout);
            }
         } else if (action === 'type') {
+           await pw.simulateCursor(step.selector, 'type');
            await pw.type(step.selector, valueToType);
         } else if (action === 'click') {
+           await pw.simulateCursor(step.selector, 'click');
            const loc = page.locator(step.selector!).first();
            await loc.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
            await loc.click({ timeout: 2000 }).catch(async () => {
@@ -241,6 +243,7 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
            });
            await pw.waitForChange(500);
         } else if (action === 'select') {
+           await pw.simulateCursor(step.selector, 'select');
            await pw.select(step.selector, valueToType);
         } else {
            throw new Error(`Unsupported action: ${action}`);

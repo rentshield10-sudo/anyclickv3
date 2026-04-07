@@ -242,6 +242,7 @@ async function executeDirectPageAction(
   await locator.scrollIntoViewIfNeeded({ timeout: 1200 }).catch(() => { });
 
   if (action === 'click') {
+    await pw.simulateCursor(selector, 'click');
     // Attempt standard click
     await locator.click({ timeout: 2000 }).catch(async () => {
       // If Playwright strict click fails, try forcing it
@@ -255,6 +256,7 @@ async function executeDirectPageAction(
   }
 
   if (action === 'type') {
+    await pw.simulateCursor(selector, 'type');
     await locator.click({ timeout: 1500 }).catch(() => { });
     await locator.fill(value || '', { timeout: 2500 }).catch(async () => {
       await locator.clear({ timeout: 1000 }).catch(() => { });
@@ -265,6 +267,7 @@ async function executeDirectPageAction(
   }
 
   if (action === 'select') {
+    await pw.simulateCursor(selector, 'select');
     await locator.selectOption(value || '', { timeout: 2500 });
     await pw.waitForChange(1200);
     return;
@@ -401,6 +404,10 @@ router.post('/test-click', async (req: Request, res: Response) => {
     if (!locator) {
       res.status(400).json({ ok: false, error: 'No fast target available for test click' });
       return;
+    }
+
+    if (target.cssSelector) {
+        await pw.simulateCursor(target.cssSelector, 'click');
     }
 
     await locator.scrollIntoViewIfNeeded({ timeout: 1500 }).catch(() => { });

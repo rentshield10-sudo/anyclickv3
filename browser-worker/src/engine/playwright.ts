@@ -92,7 +92,82 @@ export async function getPage(): Promise<Page> {
 
 // ─── Click ────────────────────────────────────────────────────────────────────
 
+export async function simulateCursor(selector: string, actionType: string = 'click'): Promise<void> {
+  if (!config.DEMO_MODE) return;
+
+  const p = await getPage();
+  try {
+    await p.evaluate(async ({ sel, action }) => {
+      // 1. Ensure fake cursor exists
+      let cursor = document.getElementById('anyclick-demo-cursor');
+      if (!cursor) {
+        cursor = document.createElement('div');
+        cursor.id = 'anyclick-demo-cursor';
+        Object.assign(cursor.style, {
+          width: '20px',
+          height: '20px',
+          background: 'rgba(239, 68, 68, 0.8)',
+          border: '2px solid white',
+          borderRadius: '50%',
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          pointerEvents: 'none',
+          zIndex: '2147483647',
+          transition: 'all 0.4s cubic-bezier(0.25, 1, 0.5, 1)',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
+        });
+        document.body.appendChild(cursor);
+      }
+
+      // 2. Resolve target
+      const el = document.querySelector(sel);
+      if (!el) return;
+
+      // 3. Highlight target
+      const originalOutline = (el as HTMLElement).style.outline;
+      const originalOutlineOffset = (el as HTMLElement).style.outlineOffset;
+      (el as HTMLElement).style.outline = '3px solid rgba(239, 68, 68, 0.6)';
+      (el as HTMLElement).style.outlineOffset = '2px';
+
+      // 4. Move cursor to center of target
+      const rect = el.getBoundingClientRect();
+      const targetX = rect.left + rect.width / 2;
+      const targetY = rect.top + rect.height / 2;
+
+      cursor.style.transform = 'translate(-50%, -50%) scale(1)';
+      cursor.style.left = `${targetX}px`;
+      cursor.style.top = `${targetY}px`;
+
+      // 5. Wait for move to finish
+      await new Promise(r => setTimeout(r, 450));
+
+      // 6. Action specific visual (click ripple/squish)
+      if (action === 'click') {
+        cursor.style.transform = 'translate(-50%, -50%) scale(0.6)';
+        cursor.style.background = 'rgba(220, 38, 38, 1)';
+        await new Promise(r => setTimeout(r, 150));
+        cursor.style.transform = 'translate(-50%, -50%) scale(1.2)';
+        cursor.style.background = 'rgba(239, 68, 68, 0.4)';
+        await new Promise(r => setTimeout(r, 100));
+        cursor.style.transform = 'translate(-50%, -50%) scale(1)';
+        cursor.style.background = 'rgba(239, 68, 68, 0.8)';
+      }
+
+      // 7. Restore highlight
+      setTimeout(() => {
+        (el as HTMLElement).style.outline = originalOutline;
+        (el as HTMLElement).style.outlineOffset = originalOutlineOffset;
+      }, 300);
+
+    }, { sel: selector, action: actionType });
+  } catch (err) {
+    log.debug({ err: (err as Error).message }, 'Demo cursor simulation failed (non-fatal)');
+  }
+}
+
 export async function click(selector: string): Promise<void> {
+  await simulateCursor(selector, 'click');
   const p = await getPage();
   log.debug({ selector }, 'click');
   await retry(async () => {
@@ -105,6 +180,7 @@ export async function click(selector: string): Promise<void> {
 // ─── Type ─────────────────────────────────────────────────────────────────────
 
 export async function type(selector: string, text: string): Promise<void> {
+  await simulateCursor(selector, 'type');
   const p = await getPage();
   log.debug({ selector, text }, 'type');
   const locator = p.locator(selector).first();
@@ -141,6 +217,7 @@ export async function scroll(direction: 'up' | 'down' = 'down', amount = 500): P
 // ─── Select ───────────────────────────────────────────────────────────────────
 
 export async function select(selector: string, value: string): Promise<void> {
+  await simulateCursor(selector, 'select');
   const p = await getPage();
   log.debug({ selector, value }, 'select');
   await retry(() => p.locator(selector).first().selectOption(value, { timeout: 5_000 }), {
