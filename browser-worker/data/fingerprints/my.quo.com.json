@@ -1,0 +1,100 @@
+[
+  {
+    "site": "my.quo.com",
+    "hostname": "my.quo.com",
+    "pathPattern": "/login",
+    "title": "Log in | Quo",
+    "headings": [],
+    "navLabels": [],
+    "formLabels": [],
+    "pageType": "login",
+    "id": "fp_1774951123714_hio0wu",
+    "matchCount": 0,
+    "lastSeenAt": "2026-03-31T09:58:43.714Z"
+  },
+  {
+    "site": "my.quo.com",
+    "hostname": "my.quo.com",
+    "pathPattern": "/inbox",
+    "title": "Quo - Phone for startups and small businesses",
+    "headings": [],
+    "navLabels": [],
+    "formLabels": [],
+    "pageType": "unknown",
+    "id": "fp_1774951275654_3h6ram",
+    "matchCount": 0,
+    "lastSeenAt": "2026-03-31T22:24:12.825Z"
+  },
+  {
+    "site": "my.quo.com",
+    "hostname": "my.quo.com",
+    "pathPattern": "/inbox/PN2RPaPY8k",
+    "title": "😚 Tenants | Quo",
+    "headings": [],
+    "navLabels": [
+      "Contacts",
+      "Analytics",
+      "Sona",
+      "Settings",
+      "Chats",
+      "Calls"
+    ],
+    "formLabels": [
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked"
+    ],
+    "pageType": "list",
+    "id": "fp_1774998853369_rijv83",
+    "matchCount": 0,
+    "lastSeenAt": "2026-04-06T06:33:36.735Z"
+  },
+  {
+    "site": "my.quo.com",
+    "hostname": "my.quo.com",
+    "pathPattern": "/inbox/PNAO2aXSml/c/CN1fd424a72d80450d91b4c83a1ca6ee7d",
+    "title": "🚗 Primary | Quo",
+    "headings": [],
+    "navLabels": [
+      "Contacts",
+      "Analytics",
+      "Sona",
+      "Settings",
+      "Chats",
+      "Calls"
+    ],
+    "formLabels": [
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked",
+      "Unchecked"
+    ],
+    "pageType": "compose",
+    "id": "fp_1775460634547_qcg3we",
+    "matchCount": 0,
+    "lastSeenAt": "2026-04-06T07:30:34.547Z"
+  }
+]

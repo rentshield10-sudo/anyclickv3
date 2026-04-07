@@ -1,7 +1,7 @@
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
 import { ActionSchema, type Action, type PageState } from '../utils/validation';
-import { recallMemory } from '../state/memory';
+import { getMemoryStore } from '../memory/MemoryStore';
 import { broadcastLog } from '../utils/events';
 
 const log = createLogger('planner');
@@ -47,7 +47,9 @@ export function buildUserPrompt(
   history: Action[],
   failures: string[]
 ): string {
-  const rememberedSequence = recallMemory(goal);
+  let hostname = 'unknown';
+  try { hostname = new URL(state.url).hostname; } catch {}
+  const rememberedSequence = getMemoryStore().runs.getLastSuccess(goal, hostname);
   const memoryBlock = rememberedSequence 
     ? `\nMEMORY CACHE (SUCCESSFUL STEPS FROM PREVIOUS RUN):\n${JSON.stringify(rememberedSequence, null, 2)}\nIf the current state resembles the memory, strongly prefer continuing the sequence above.`
     : '';

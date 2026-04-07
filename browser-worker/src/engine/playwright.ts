@@ -37,9 +37,15 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
     args: [
       '--no-first-run',
       '--no-default-browser-check',
-      '--disable-blink-features=AutomationControlled'
+      '--disable-blink-features=AutomationControlled',
+      '--test-type',
+      '--disable-infobars'
     ],
-    ignoreDefaultArgs: ['--enable-automation'],
+    ignoreDefaultArgs: [
+      '--enable-automation', 
+      '--no-sandbox', 
+      '--disable-extensions'
+    ],
     viewport: null, // use full window size
   });
 
@@ -56,7 +62,12 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
 export async function navigate(url: string): Promise<void> {
   const { page: p } = await launchOrReuse();
   log.info({ url }, 'Navigating');
-  await retry(() => p.goto(url, { waitUntil: 'load', timeout: 30_000 }), {
+  await retry(async () => {
+    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await p.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
+    await p.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+    await p.waitForTimeout(1200);
+  }, {
     label: 'navigate',
   });
 }
@@ -73,7 +84,11 @@ export async function getPage(): Promise<Page> {
 export async function click(selector: string): Promise<void> {
   const p = await getPage();
   log.debug({ selector }, 'click');
-  await retry(() => p.locator(selector).first().click({ timeout: 8_000 }), { label: 'click' });
+  await retry(async () => {
+    const locator = p.locator(selector).filter({ visible: true }).first();
+    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await locator.click({ timeout: 8_000 });
+  }, { label: 'click' });
 }
 
 // ─── Type ─────────────────────────────────────────────────────────────────────
@@ -94,6 +109,14 @@ export async function press(selector: string, key: string): Promise<void> {
   const p = await getPage();
   log.debug({ selector, key }, 'press');
   await retry(() => p.locator(selector).first().press(key, { timeout: 5_000 }), { label: 'press' });
+}
+
+// ─── Hover ────────────────────────────────────────────────────────────────────
+
+export async function hover(selector: string): Promise<void> {
+  const p = await getPage();
+  log.debug({ selector }, 'hover');
+  await retry(() => p.locator(selector).first().hover({ timeout: 5_000 }), { label: 'hover' });
 }
 
 // ─── Scroll ───────────────────────────────────────────────────────────────────
@@ -121,12 +144,38 @@ export async function extract(selector: string): Promise<string> {
   return (await p.locator(selector).first().textContent({ timeout: 5_000 })) ?? '';
 }
 
+// ─── Form Fill (multiple fields) ──────────────────────────────────────────────
+
+export async function formFill(fields: { selector: string; value: string }[]): Promise<void> {
+  const p = await getPage();
+  for (const field of fields) {
+    log.debug({ selector: field.selector, value: field.value }, 'form-fill');
+    const locator = p.locator(field.selector).first();
+    await locator.click({ timeout: 5_000 }).catch(() => {});
+    await locator.fill(field.value, { timeout: 5_000 });
+  }
+}
+
 // ─── Wait for change ──────────────────────────────────────────────────────────
 
-export async function waitForChange(timeoutMs = 3_000): Promise<void> {
+export async function waitForChange(timeoutMs = 1_500): Promise<void> {
   const p = await getPage();
-  // Instead of networkidle (which hangs on chat apps), we just wait for the main 'load' state
-  await p.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
+  // Wrap network idle in a race so it strictly aborts at the timeout
+  // instead of stacking multiple timeout waits sequentially.
+  await Promise.race([
+    p.waitForLoadState('networkidle'),
+    new Promise(resolve => setTimeout(resolve, timeoutMs))
+  ]).catch(() => {});
+  
+  // Short mandatory settle for React/Vue DOM updates
+  await p.waitForTimeout(300);
+}
+
+// ─── Screenshot ───────────────────────────────────────────────────────────────
+
+export async function screenshot(path?: string): Promise<Buffer> {
+  const p = await getPage();
+  return await p.screenshot({ path, fullPage: false });
 }
 
 // ─── Teardown ─────────────────────────────────────────────────────────────────

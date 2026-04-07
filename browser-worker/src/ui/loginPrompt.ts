@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import open from 'open';
 import { createLogger } from '../utils/logger';
 import { detectLogin } from '../state/detectLogin';
-import * as pw from '../engines/playwright';
+import * as pw from '../engine/playwright';
 import { sleep } from '../utils/retry';
 
 const log = createLogger('login-prompt');

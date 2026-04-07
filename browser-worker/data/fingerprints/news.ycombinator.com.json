@@ -1,0 +1,28 @@
+[
+  {
+    "site": "news.ycombinator.com",
+    "hostname": "news.ycombinator.com",
+    "pathPattern": "/login",
+    "title": "",
+    "headings": [],
+    "navLabels": [],
+    "formLabels": [],
+    "pageType": "login",
+    "id": "fp_1774910115155_oj451w",
+    "matchCount": 0,
+    "lastSeenAt": "2026-03-30T22:38:34.402Z"
+  },
+  {
+    "site": "news.ycombinator.com",
+    "hostname": "news.ycombinator.com",
+    "pathPattern": "/",
+    "title": "Hacker News",
+    "headings": [],
+    "navLabels": [],
+    "formLabels": [],
+    "pageType": "list",
+    "id": "fp_1775070626250_99kwgv",
+    "matchCount": 0,
+    "lastSeenAt": "2026-04-02T21:14:07.274Z"
+  }
+]

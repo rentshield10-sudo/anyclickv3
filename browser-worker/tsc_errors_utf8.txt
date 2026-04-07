@@ -1,0 +1,3 @@
+﻿src/memory/RecipeMemory.ts(4,15): error TS2305: Module '"../locator/types"' has no exported member 'ActionRecipe'.
+src/routes/query.routes.ts(173,32): error TS2322: Type 'string | null' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.

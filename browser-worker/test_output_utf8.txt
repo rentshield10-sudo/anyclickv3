@@ -1,0 +1,50 @@
+﻿1. Starting Session (Hacker News Login)...
+{
+  ok: true,
+  sessionId: '584cba9b-e4b4-46de-965c-4725a703a811',
+  mode: 'execution',
+  profileDir: 'C:\\Users\\mocha\\Documents\\CODES\\anyclick\\browser-worker\\profiles\\chrome-agent-profile',
+  url: 'https://news.ycombinator.com/login',
+  loginStatus: { loggedIn: false, evidence: [ 'URL matches auth/login pattern' ] },
+  fingerprint: { pageType: 'login', title: '', pathPattern: '/login' }
+}
+
+2. Filling out the login form...
+{
+  "ok": false,
+  "results": [
+    {
+      "ok": false,
+      "error": "Could not resolve field"
+    },
+    {
+      "ok": false,
+      "error": "Could not resolve field"
+    }
+  ]
+}
+
+3. Clicking the login button...
+{
+  "ok": true,
+  "data": {
+    "matched": true,
+    "target": {
+      "selector": "input[type=\"submit\"]:has-text(\"login\")",
+      "confidence": 0.9500000000000001
+    },
+    "method": "recipe_replay",
+    "pageChanged": false
+  },
+  "logs": [
+    {
+      "step": "recipe_replay",
+      "result": "hit",
+      "strategy": "tag_text",
+      "ms": 4
+    }
+  ]
+}
+
+4. Stopping session...
+Done!

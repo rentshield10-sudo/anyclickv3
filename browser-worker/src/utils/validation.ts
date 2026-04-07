@@ -30,6 +30,7 @@ export const PageStateSchema = z.object({
   panels: z.object({
     main: z.object({ heading: z.string(), text: z.string() }),
     right: z.object({ heading: z.string(), text: z.string() }),
+    left: z.object({ heading: z.string(), text: z.string() }).optional(),
   }),
   elements: z.array(ElementSchema),
   frames: z.array(z.object({ name: z.string(), url: z.string() })),

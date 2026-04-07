@@ -1,0 +1,2 @@
+﻿src/prompts/planner.ts(4,30): error TS2307: Cannot find module '../state/memory' or its corresponding type declarations.
+src/ui/loginPrompt.ts(6,21): error TS2307: Cannot find module '../engines/playwright' or its corresponding type declarations.
