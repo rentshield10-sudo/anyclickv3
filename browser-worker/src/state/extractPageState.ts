@@ -334,28 +334,51 @@ async function extractElements(page: Page): Promise<Element[]> {
           rect.left >= 0 &&
           rect.left <= window.innerWidth
         ) score += 50;
+
+        // Boost primary interactive controls heavily
         if (
           tag === 'button' ||
-          tag === 'input' ||
           tag === 'textarea' ||
           tag === 'select' ||
           tag === 'a' ||
-          tag === 'tr' ||
-          tag === 'label' ||
           role === 'button' ||
           role === 'link' ||
           role === 'textbox' ||
-          role === 'row' ||
-          role === 'option' ||
-          role === 'radio' ||
-          role === 'checkbox' ||
           el.getAttribute('contenteditable') === 'true' ||
           el.getAttribute('contenteditable') === 'plaintext-only'
-        ) score += 20;
+        ) {
+          score += 30;
+        }
+
+        // Radios and Checkboxes get massive priority
+        if (tag === 'input') {
+          score += 30;
+          if (type === 'radio' || type === 'checkbox') score += 50;
+        }
+        if (role === 'radio' || role === 'checkbox' || role === 'option' || role === 'switch') {
+          score += 50;
+        }
+
+        // Labels associated with inputs get massive priority
+        if (tag === 'label') {
+          score += 30;
+          if (el.getAttribute('for')) score += 30;
+          if (el.querySelector('input[type="radio"], input[type="checkbox"]')) score += 30;
+        }
 
         if (type === 'contenteditable' || role === 'textbox') score += 25;
         if (placeholder) score += 15;
         if (style.cursor === 'pointer') score += 25;
+
+        // Demote broad generic containers so inner specific controls win
+        if (tag === 'tr' || tag === 'td' || tag === 'th' || tag === 'li' || role === 'row' || role === 'gridcell' || role === 'presentation') {
+          score -= 40;
+        }
+
+        const classNameStr = (el.className || '').toString().toLowerCase();
+        if (classNameStr.includes('row') || classNameStr.includes('cell') || classNameStr.includes('container') || classNameStr.includes('wrapper')) {
+          score -= 20;
+        }
 
         let region = 'unknown';
         let node: HTMLElement | null = el;
