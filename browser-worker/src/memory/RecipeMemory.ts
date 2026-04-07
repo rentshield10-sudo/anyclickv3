@@ -214,6 +214,13 @@ export interface VariableDefinition {
   };
 }
 
+export interface WaitCondition {
+  kind: 'text_appears' | 'selector_appears' | 'selector_disappears' | 'url_change' | 'idle' | 'delay';
+  text?: string;
+  selector?: string;
+  timeout_ms?: number;
+}
+
 export interface StepInputTemplate {
   kind: 'template';
   template: string;

@@ -51,7 +51,17 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
 
   // Use existing page or open a new one
   const pages = context.pages();
-  page = pages.length > 0 ? pages[0] : await context.newPage();
+  if (pages.length > 0) {
+    // Return the first valid page and optionally close extra empty ones created on launch
+    page = pages[0];
+    
+    // Sometimes Chrome opens a "New Tab" alongside our requested tab
+    if (pages.length > 1 && pages[1].url() === 'about:blank') {
+      await pages[1].close().catch(() => {});
+    }
+  } else {
+    page = await context.newPage();
+  }
 
   log.info('Chrome launched successfully');
   return { context, page };
@@ -63,6 +73,7 @@ export async function navigate(url: string): Promise<void> {
   const { page: p } = await launchOrReuse();
   log.info({ url }, 'Navigating');
   await retry(async () => {
+    // Just navigate the existing page instead of making a new one
     await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await p.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
     await p.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});

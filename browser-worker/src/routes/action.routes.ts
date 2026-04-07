@@ -231,6 +231,12 @@ async function executeDirectPageAction(
   selector: string,
   value?: string
 ): Promise<void> {
+  if (action === 'wait') {
+    // Basic fallback for a wait action if someone calls it direct
+    await pw.waitForChange(5000);
+    return;
+  }
+
   const locator = page.locator(selector).first();
 
   await locator.scrollIntoViewIfNeeded({ timeout: 1200 }).catch(() => { });
@@ -239,7 +245,7 @@ async function executeDirectPageAction(
     await locator.click({ timeout: 2500 }).catch(async () => {
       await locator.click({ force: true, timeout: 1500 });
     });
-    await page.waitForTimeout(100);
+    await pw.waitForChange(1200);
     return;
   }
 
@@ -249,13 +255,13 @@ async function executeDirectPageAction(
       await locator.clear({ timeout: 1000 }).catch(() => { });
       await locator.type(value || '', { timeout: 2500 });
     });
-    await page.waitForTimeout(100);
+    await pw.waitForChange(1200);
     return;
   }
 
   if (action === 'select') {
     await locator.selectOption(value || '', { timeout: 2500 });
-    await page.waitForTimeout(100);
+    await pw.waitForChange(1200);
     return;
   }
 
@@ -397,7 +403,7 @@ router.post('/test-click', async (req: Request, res: Response) => {
       await locator.click({ force: true, timeout: 1500 });
     });
 
-    await page.waitForTimeout(250);
+    await pw.waitForChange(1200);
 
     res.json({
       ok: true,
@@ -544,6 +550,24 @@ router.post('/run-flow', async (req: Request, res: Response) => {
       let selector = step.target?.cssSelector;
 
       log.info({ stepIndex: i, action, selector: selector || '(none)', target: step.target }, `Running flow step ${i + 1}/${steps.length}`);
+
+      if (action === 'wait') {
+        const timeout = 5000;
+        const waitValue = value || (step.target ? step.target.text : '') || '';
+        if (waitValue) {
+          await page.waitForSelector(`text=${waitValue}`, { timeout }).catch(() => {});
+        } else {
+          await pw.waitForChange(timeout);
+        }
+        
+        if (sessionId) {
+          try {
+            const session = getSession(sessionId);
+            session.stepCount++;
+          } catch { }
+        }
+        continue;
+      }
 
       // If no CSS selector, try to resolve via locator engine using text/label/role
       if (!selector && step.target) {

@@ -1365,16 +1365,20 @@ export function buildDashboardHtml(): string {
         card.appendChild(actionRow);
 
         const valueRow = document.createElement('div');
-        valueRow.className = 'flow-step-value-row' + ((step.action === 'type' || step.action === 'select') ? ' visible' : '');
+        valueRow.className = 'flow-step-value-row' + ((step.action === 'type' || step.action === 'select' || step.action === 'wait') ? ' visible' : '');
 
         const valueLabel = document.createElement('label');
-        valueLabel.textContent = step.action === 'select' ? 'Option / Value' : 'Text / Value';
+        if (step.action === 'select') valueLabel.textContent = 'Option / Value';
+        else if (step.action === 'wait') valueLabel.textContent = 'Wait Text / Selector';
+        else valueLabel.textContent = 'Text / Value';
         valueRow.appendChild(valueLabel);
 
         const valueInput = document.createElement('input');
         valueInput.type = 'text';
         valueInput.className = 'flow-step-value-input';
-        valueInput.placeholder = step.action === 'select' ? 'Enter option value' : 'Enter text or phone number';
+        if (step.action === 'select') valueInput.placeholder = 'Enter option value';
+        else if (step.action === 'wait') valueInput.placeholder = 'Enter text to wait for';
+        else valueInput.placeholder = 'Enter text or phone number';
         valueInput.value = step.value || '';
         valueInput.dataset.stepIndex = String(index);
         valueRow.appendChild(valueInput);
@@ -1459,6 +1463,14 @@ export function buildDashboardHtml(): string {
         return null;
       }
 
+      if (step.action === 'wait') {
+        return await apiCall('POST', '/browser/wait-for-condition', {
+          condition: 'text_appears',
+          text: step.value || '',
+          timeout: 5000
+        });
+      }
+
       if (step.action === 'click') {
         return await apiCall('POST', '/browser/direct-click', {
           selector: step.target.cssSelector
@@ -1497,7 +1509,12 @@ export function buildDashboardHtml(): string {
         }
       };
 
-      if (step.action === 'click') {
+      if (step.action === 'wait') {
+        apiPath = '/browser/wait-for-condition';
+        requestBody.condition = 'text_appears';
+        requestBody.text = step.value || '';
+        requestBody.timeout = 5000;
+      } else if (step.action === 'click') {
         apiPath = '/browser/click';
       } else if (step.action === 'type') {
         apiPath = '/browser/type';
@@ -2269,7 +2286,7 @@ export function buildDashboardHtml(): string {
       }
     });
 
-    flowStepsList.addEventListener('change', (event) => {
+    flowStepsList.addEventListener('input', (event) => {
       const target = event.target;
       if (target instanceof HTMLInputElement && target.classList.contains('flow-step-value-input')) {
         const rawIndex = target.dataset.stepIndex;
@@ -2279,7 +2296,10 @@ export function buildDashboardHtml(): string {
         }
         return;
       }
+    });
 
+    flowStepsList.addEventListener('change', (event) => {
+      const target = event.target;
       if (target instanceof HTMLSelectElement && target.classList.contains('flow-step-action-select')) {
         const rawIndex = target.dataset.stepIndex;
         const index = typeof rawIndex === 'string' ? parseInt(rawIndex, 10) : -1;

@@ -16,7 +16,7 @@ export type LocatorKind =
 
 export interface LocatorCandidate {
   step_id?: string;
-  kind: LocatorKind;
+  kind: LocatorKind | 'wait';
   selector: string;
   role?: string;
   text?: string;
@@ -24,6 +24,7 @@ export interface LocatorCandidate {
   value?: string;
   input?: import('../memory/RecipeMemory').StepInputTemplate;
   action?: string;
+  wait?: import('../memory/RecipeMemory').WaitCondition;
   priority: number;
   confidence: number;
 }
