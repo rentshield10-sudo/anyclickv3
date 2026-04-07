@@ -291,13 +291,18 @@ async function extractElements(page: Page): Promise<Element[]> {
       }
 
       function isActuallyVisible(el: HTMLElement, rect: DOMRect, style: CSSStyleDeclaration): boolean {
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.visibility !== 'hidden' &&
-          style.display !== 'none' &&
-          style.opacity !== '0'
-        );
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+
+        const isInput = el.tagName === 'INPUT';
+        const isLabel = el.tagName === 'LABEL';
+
+        // Keep 0-opacity inputs and labels because frameworks often hide the real form element and use CSS overlays
+        if (style.opacity === '0' && !isInput && !isLabel) return false;
+        
+        // Keep 0x0 inputs and labels because frameworks often wrap styling overlays with zero-sized logical controls
+        if ((rect.width === 0 || rect.height === 0) && !isInput && !isLabel) return false;
+
+        return true;
       }
 
       function getActiveModal(): HTMLElement | null {

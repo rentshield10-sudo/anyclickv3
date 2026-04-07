@@ -97,7 +97,12 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
 
   const p = await getPage();
   try {
-    await p.evaluate(async ({ sel, action }) => {
+    // Rely on Playwright's robust locator rather than document.querySelector
+    // to bypass pseudo-class limitations (e.g. :has-text)
+    const locator = p.locator(selector).first();
+    
+    // Attempt evaluation with a short timeout. If element is not attached yet, just skip demo cursor gracefully.
+    await locator.evaluate(async (el: HTMLElement, action: string) => {
       // 1. Ensure fake cursor exists
       let cursor = document.getElementById('anyclick-demo-cursor');
       if (!cursor) {
@@ -110,27 +115,26 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
           border: '2px solid white',
           borderRadius: '50%',
           position: 'fixed',
-          top: '50%',
-          left: '50%',
           pointerEvents: 'none',
           zIndex: '2147483647',
           transition: 'all 0.4s cubic-bezier(0.25, 1, 0.5, 1)',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
+          boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+          left: `${window.innerWidth / 2}px`,
+          top: `${window.innerHeight / 2}px`
         });
         document.body.appendChild(cursor);
+        
+        // Force reflow
+        void cursor.offsetHeight;
       }
 
-      // 2. Resolve target
-      const el = document.querySelector(sel);
-      if (!el) return;
+      // 2. Highlight target
+      const originalOutline = el.style.outline;
+      const originalOutlineOffset = el.style.outlineOffset;
+      el.style.outline = '3px solid rgba(239, 68, 68, 0.6)';
+      el.style.outlineOffset = '2px';
 
-      // 3. Highlight target
-      const originalOutline = (el as HTMLElement).style.outline;
-      const originalOutlineOffset = (el as HTMLElement).style.outlineOffset;
-      (el as HTMLElement).style.outline = '3px solid rgba(239, 68, 68, 0.6)';
-      (el as HTMLElement).style.outlineOffset = '2px';
-
-      // 4. Move cursor to center of target
+      // 3. Move cursor to center of target
       const rect = el.getBoundingClientRect();
       const targetX = rect.left + rect.width / 2;
       const targetY = rect.top + rect.height / 2;
@@ -139,10 +143,10 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
       cursor.style.left = `${targetX}px`;
       cursor.style.top = `${targetY}px`;
 
-      // 5. Wait for move to finish
+      // 4. Wait for move to finish
       await new Promise(r => setTimeout(r, 450));
 
-      // 6. Action specific visual (click ripple/squish)
+      // 5. Action specific visual (click ripple/squish)
       if (action === 'click') {
         cursor.style.transform = 'translate(-50%, -50%) scale(0.6)';
         cursor.style.background = 'rgba(220, 38, 38, 1)';
@@ -154,15 +158,15 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
         cursor.style.background = 'rgba(239, 68, 68, 0.8)';
       }
 
-      // 7. Restore highlight
+      // 6. Restore highlight
       setTimeout(() => {
-        (el as HTMLElement).style.outline = originalOutline;
-        (el as HTMLElement).style.outlineOffset = originalOutlineOffset;
+        el.style.outline = originalOutline;
+        el.style.outlineOffset = originalOutlineOffset;
       }, 300);
 
-    }, { sel: selector, action: actionType });
+    }, actionType, { timeout: 1500 });
   } catch (err) {
-    log.debug({ err: (err as Error).message }, 'Demo cursor simulation failed (non-fatal)');
+    log.trace({ err: (err as Error).message }, 'Demo cursor simulation skipped or failed (non-fatal)');
   }
 }
 
