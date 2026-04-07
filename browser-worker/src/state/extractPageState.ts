@@ -136,6 +136,10 @@ const INTERACTIVE_SELECTOR = [
   'input:not([type="hidden"])',
   'select',
   'textarea',
+  'label',
+  'tr',
+  'td',
+  'th',
   '[role="button"]',
   '[role="link"]',
   '[role="menuitem"]',
@@ -144,6 +148,10 @@ const INTERACTIVE_SELECTOR = [
   '[role="radio"]',
   '[role="combobox"]',
   '[role="listbox"]',
+  '[role="option"]',
+  '[role="treeitem"]',
+  '[role="gridcell"]',
+  '[role="row"]',
   '[role="switch"]',
   '[role="textbox"]',
   '[contenteditable="true"]',
@@ -152,6 +160,13 @@ const INTERACTIVE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
   '[onclick]',
   'li',
+  '.row',
+  '.list-item',
+  '.item',
+  '[class*="row" i]',
+  '[class*="item" i]',
+  '[class*="clickable" i]',
+  '[class*="selectable" i]'
 ].join(', ');
 
 async function extractElements(page: Page): Promise<Element[]> {
@@ -321,15 +336,22 @@ async function extractElements(page: Page): Promise<Element[]> {
           tag === 'textarea' ||
           tag === 'select' ||
           tag === 'a' ||
+          tag === 'tr' ||
+          tag === 'label' ||
           role === 'button' ||
           role === 'link' ||
           role === 'textbox' ||
+          role === 'row' ||
+          role === 'option' ||
+          role === 'radio' ||
+          role === 'checkbox' ||
           el.getAttribute('contenteditable') === 'true' ||
           el.getAttribute('contenteditable') === 'plaintext-only'
         ) score += 20;
 
         if (type === 'contenteditable' || role === 'textbox') score += 25;
         if (placeholder) score += 15;
+        if (style.cursor === 'pointer') score += 25;
 
         let region = 'unknown';
         let node: HTMLElement | null = el;
