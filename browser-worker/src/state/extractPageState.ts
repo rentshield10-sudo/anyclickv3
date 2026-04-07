@@ -300,7 +300,48 @@ async function extractElements(page: Page): Promise<Element[]> {
         );
       }
 
-      const rawNodes = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+      function getActiveModal(): HTMLElement | null {
+        const candidates = Array.from(document.querySelectorAll(
+          'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], .modal, .dialog, [class*="modal" i], [class*="dialog" i]'
+        )) as HTMLElement[];
+
+        const visibleCandidates = candidates.filter(el => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          if (rect.width === 0 || rect.height === 0) return false;
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+          
+          const isSemantic = el.tagName === 'DIALOG' || el.hasAttribute('role') || el.hasAttribute('aria-modal');
+          if (!isSemantic) {
+             if (style.position !== 'fixed' && style.position !== 'absolute') return false;
+          }
+          return true;
+        });
+
+        if (visibleCandidates.length === 0) return null;
+
+        let maxZ = -1;
+        // Default to the last one in the DOM if z-indices are tied or not set
+        let topModal = visibleCandidates[visibleCandidates.length - 1];
+
+        for (const cand of visibleCandidates) {
+          const z = parseInt(window.getComputedStyle(cand).zIndex);
+          if (!isNaN(z) && z > maxZ) {
+            maxZ = z;
+            topModal = cand;
+          }
+        }
+        return topModal;
+      }
+
+      const scanRoot = getActiveModal() || document;
+      const rawNodes = Array.from(scanRoot.querySelectorAll(selector)) as HTMLElement[];
+      
+      // If we are scoped to a modal, ensure the modal's own close buttons/containers are included if they match
+      if (scanRoot !== document && (scanRoot as HTMLElement).matches && (scanRoot as HTMLElement).matches(selector)) {
+         rawNodes.push(scanRoot as HTMLElement);
+      }
+
       const seen = new Set<HTMLElement>();
       const nodes: HTMLElement[] = [];
 
