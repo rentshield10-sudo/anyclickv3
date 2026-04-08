@@ -1,4 +1,4 @@
-import { chromium, BrowserContext, Page } from 'playwright';
+import { chromium, BrowserContext, Page, Download } from 'playwright';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config';
