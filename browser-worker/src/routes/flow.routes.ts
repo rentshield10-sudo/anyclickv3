@@ -248,17 +248,19 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
         } else if (action === 'download') {
            const dlOpts = { ...(step.download || {}) };
            const filenameTpl = dlOpts.filename_template || valueToType || '';
-           if (filenameTpl) dlOpts.filename_template = filenameTpl;
+           
+           if (filenameTpl) {
+               dlOpts.filename_template = filenameTpl;
+           } else {
+               delete dlOpts.filename_template;
+           }
            
            // Support dynamic variable interpolation in filename template
            if (dlOpts.filename_template && dlOpts.filename_template.includes('{{')) {
-               const match = dlOpts.filename_template.match(/\{\{([^}]+)\}\}/);
-               if (match) {
-                   const varName = match[1].trim();
-                   if (inputs[varName] !== undefined) {
-                       dlOpts.filename_template = dlOpts.filename_template.replace(`{{${varName}}}`, String(inputs[varName]));
-                   }
-               }
+               dlOpts.filename_template = dlOpts.filename_template.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
+                   const v = inputs[key.trim()];
+                   return v !== undefined ? String(v) : '';
+               });
            }
            
            const result = await pw.download(step.selector, dlOpts);

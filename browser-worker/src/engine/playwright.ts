@@ -298,106 +298,180 @@ export async function screenshot(path?: string): Promise<Buffer> {
   return await p.screenshot({ path, fullPage: false });
 }
 
-export async function download(selector: string, opts: import('../memory/RecipeMemory').DownloadConfig = {}): Promise<{ saved_path: string; filename: string; source: string }> {
-  await simulateCursor(selector, 'click');
-  const p = await getPage();
-  const timeoutMs = opts.timeout_ms || 30000;
+function ensureDir(dir: string) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
-  log.info({ selector, opts }, 'Preparing to trigger download');
+function sanitizeFilename(name: string): string {
+  return name.replace(/[/\\?%*:|"<>]/g, '_').trim();
+}
 
-  // Set up raw promises without immediate catch, so they don't resolve to null prematurely
-  const downloadPromise = p.waitForEvent('download', { timeout: timeoutMs }).then(d => ({ type: 'download', payload: d }));
-  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs }).then(popup => ({ type: 'popup', payload: popup }));
-
-  const loc = p.locator(selector).first();
-  await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-  await loc.click({ timeout: 5000 }).catch(async () => {
-     await loc.click({ force: true, timeout: 2000 }).catch(async () => {
-         await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
-     });
-  });
-
-  let raceResult: any = null;
-  try {
-     raceResult = await Promise.race([
-        downloadPromise,
-        popupPromise
-     ]);
-  } catch (err: any) {
-     throw new Error(`Click on selector did not trigger a download or a popup within ${timeoutMs}ms.`);
+function buildDefaultFilename(
+  suggested: string | null | undefined,
+  optsFilename: string | undefined,
+  popupUrl: string | null,
+  source: string
+): string {
+  if (optsFilename && optsFilename.trim()) {
+    return sanitizeFilename(optsFilename);
   }
 
-  let finalDownload = null;
-  let source = 'direct';
-  let popupPage = null;
-
-  if (raceResult.type === 'download' && raceResult.payload) {
-     finalDownload = raceResult.payload;
-  } else if (raceResult.type === 'popup' && raceResult.payload) {
-     popupPage = raceResult.payload as Page;
-     source = 'popup_pdf';
-     log.info('Click opened a new tab/popup. Checking for PDF/viewer download...');
-     
-     try {
-       await popupPage.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-       
-       // Heuristic: Some viewers (like Chrome's native PDF) have a download button in shadow DOM we can trigger
-       const url = popupPage.url().toLowerCase();
-       const title = (await popupPage.title().catch(() => '')).toLowerCase();
-       const isPDF = url.endsWith('.pdf') || title.includes('pdf');
-       
-       if (isPDF) {
-          log.info('Popup appears to be a PDF. Looking for native viewer download button...');
-          // Chrome's PDF viewer has a download button with id "download" inside its shadow root
-          const dlBtn = popupPage.locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]').first();
-          if (await dlBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-             const popupDownloadPromise = popupPage.waitForEvent('download', { timeout: 15000 });
-             await dlBtn.click({ force: true }).catch(() => {});
-             finalDownload = await popupDownloadPromise.catch(() => null);
-          }
-       }
-       
-       if (!finalDownload) {
-           throw new Error('Popup opened but no download event was captured from it.');
-       }
-     } catch (err: any) {
-       if (opts.close_popup && popupPage) {
-           await popupPage.close().catch(() => {});
-       }
-       throw new Error(`Failed to capture download from popup: ${err.message}`);
-     }
+  if (suggested && suggested.trim()) {
+    return sanitizeFilename(suggested);
   }
 
-  if (!finalDownload) {
-     throw new Error('Failed to resolve download object.');
+  const ts = Date.now();
+
+  const looksPdf =
+    source === 'popup_pdf' ||
+    !!popupUrl?.toLowerCase().includes('.pdf');
+
+  if (looksPdf) {
+    return `bill_${ts}.pdf`;
   }
 
-  // Handle the save
-  const suggestedFilename = finalDownload.suggestedFilename() || `download_${Date.now()}.bin`;
-  let filename = opts.filename_template || suggestedFilename;
-  
-  // Clean filename to prevent path traversal
-  filename = filename.replace(/[/\\?%*:|"<>]/g, '_');
-  
+  return `download_${ts}.bin`;
+}
+
+async function trySaveDownload(
+  download: Download,
+  opts: { save_dir?: string; filename_template?: string },
+  popupUrl: string | null,
+  source: string
+) {
+  let suggested = '';
+  try { suggested = download.suggestedFilename(); } catch {}
+  const filename = buildDefaultFilename(
+    suggested,
+    opts.filename_template,
+    popupUrl,
+    source
+  );
+
   const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
-  if (!fs.existsSync(saveDir)) {
-    fs.mkdirSync(saveDir, { recursive: true });
-  }
+  ensureDir(saveDir);
 
   const savedPath = path.join(saveDir, filename);
-  await finalDownload.saveAs(savedPath);
-
-  if (opts.close_popup && popupPage) {
-      await popupPage.close().catch(() => {});
-  }
-
-  log.info({ savedPath, filename, source }, 'Download completed successfully');
+  await download.saveAs(savedPath);
 
   return {
     saved_path: path.relative(process.cwd(), savedPath),
     filename,
-    source
+    source,
   };
+}
+
+export async function download(
+  selector: string,
+  opts: import('../memory/RecipeMemory').DownloadConfig = {}
+): Promise<{ saved_path: string; filename: string; source: string }> {
+  await simulateCursor(selector, 'click');
+
+  const p = await getPage();
+  const timeoutMs = opts.timeout_ms || 30000;
+  const loc = p.locator(selector).first();
+
+  await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+
+  const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs });
+  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs });
+
+  await loc.click({ timeout: 5000 }).catch(async () => {
+    await loc.click({ force: true, timeout: 2000 }).catch(async () => {
+      await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
+    });
+  });
+
+  try {
+    const direct = await Promise.race([
+      directDownloadPromise.then((d) => ({ kind: 'download' as const, d })),
+      popupPromise.then((popup) => ({ kind: 'popup' as const, popup })),
+    ]);
+
+    if (direct.kind === 'download') {
+      return await trySaveDownload(direct.d, opts, null, 'direct');
+    }
+
+    const popupPage = direct.popup as Page;
+    const popupUrlBefore = popupPage.url() || null;
+
+    try {
+      await popupPage.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+      await popupPage.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    } catch {}
+
+    const popupUrl = popupPage.url() || popupUrlBefore || null;
+    let popupTitle = '';
+    try { popupTitle = await popupPage.title(); } catch {}
+    const lowerUrl = (popupUrl || '').toLowerCase();
+    const lowerTitle = popupTitle.toLowerCase();
+
+    const isLikelyPdf =
+      lowerUrl.includes('.pdf') ||
+      lowerTitle.includes('pdf') ||
+      lowerUrl.startsWith('blob:');
+
+    const popupNaturalDownload = await popupPage
+      .waitForEvent('download', { timeout: 2500 })
+      .catch(() => null);
+
+    if (popupNaturalDownload) {
+      const result = await trySaveDownload(popupNaturalDownload, opts, popupUrl, 'popup_pdf');
+      if (opts.close_popup !== false) {
+        await popupPage.close().catch(() => {});
+      }
+      return result;
+    }
+
+    if (isLikelyPdf && popupUrl && !popupUrl.startsWith('blob:')) {
+      const filename = buildDefaultFilename(undefined, opts.filename_template, popupUrl, 'popup_pdf');
+      const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
+      ensureDir(saveDir);
+      const savedPath = path.join(saveDir, filename);
+
+      const bytes = await popupPage.evaluate(async (url) => {
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) throw new Error(`Failed to fetch popup PDF URL: ${res.status}`);
+        const buf = await res.arrayBuffer();
+        return Array.from(new Uint8Array(buf));
+      }, popupUrl).catch(() => null);
+
+      if (bytes && bytes.length > 0) {
+        fs.writeFileSync(savedPath, Buffer.from(bytes));
+        if (opts.close_popup !== false) {
+          await popupPage.close().catch(() => {});
+        }
+        return {
+          saved_path: path.relative(process.cwd(), savedPath),
+          filename,
+          source: 'popup_pdf',
+        };
+      }
+    }
+
+    const viewerDownloadPromise = popupPage.waitForEvent('download', { timeout: 10000 }).catch(() => null);
+
+    const dlBtn = popupPage
+      .locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]')
+      .first();
+
+    if (await dlBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await dlBtn.click({ force: true }).catch(() => {});
+      const viewerDownload = await viewerDownloadPromise;
+
+      if (viewerDownload) {
+        const result = await trySaveDownload(viewerDownload, opts, popupUrl, 'popup_pdf');
+        if (opts.close_popup !== false) {
+          await popupPage.close().catch(() => {});
+        }
+        return result;
+      }
+    }
+
+    throw new Error('Popup opened, but no downloadable file could be captured automatically.');
+  } catch (err: any) {
+    throw new Error(`Download failed: ${err.message}`);
+  }
 }
 
 // ─── Teardown ─────────────────────────────────────────────────────────────────
