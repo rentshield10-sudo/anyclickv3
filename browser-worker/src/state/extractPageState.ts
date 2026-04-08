@@ -270,7 +270,18 @@ async function extractElements(page: Page): Promise<Element[]> {
           return `[role="${role}"]:has-text("${innerText.replace(/"/g, '\\"')}")`;
         }
 
-        // 7. tag + nth-of-type (always works)
+        // 7. unique class combination
+        if (typeof el.className === 'string' && el.className.trim()) {
+           const classes = el.className.trim().split(/\s+/).filter(c => /^[a-zA-Z0-9_-]+$/.test(c));
+           for (const cls of classes) {
+              try {
+                 const cand = `${tag}.${cls}`;
+                 if (document.querySelectorAll(cand).length === 1) return cand;
+              } catch (e) {}
+           }
+        }
+
+        // 8. tag + nth-of-type (always works)
         const parent = el.parentElement;
         if (parent) {
           const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
@@ -417,12 +428,46 @@ async function extractElements(page: Page): Promise<Element[]> {
         if (style.cursor === 'pointer') score += 25;
 
         // Demote broad generic containers so inner specific controls win
-        if (tag === 'tr' || tag === 'td' || tag === 'th' || tag === 'li' || role === 'row' || role === 'gridcell' || role === 'presentation') {
-          score -= 40;
+        const classNameStr = (el.className || '').toString().toLowerCase();
+        
+        if (tag === 'tr' || tag === 'li' || role === 'row' || role === 'presentation') {
+          score -= 50;
         }
 
-        const classNameStr = (el.className || '').toString().toLowerCase();
-        if (classNameStr.includes('row') || classNameStr.includes('cell') || classNameStr.includes('container') || classNameStr.includes('wrapper')) {
+        // Geometry: massive boost for small explicit controls
+        const isSmallControl = rect.width > 0 && rect.width <= 60 && rect.height > 0 && rect.height <= 60;
+        if (isSmallControl) score += 30;
+
+        // Is it the first cell or in the first cell of a row?
+        let isFirstCell = false;
+        const closestTd = el.closest('td, th');
+        if (tag === 'td' || tag === 'th') {
+           if (!el.previousElementSibling) isFirstCell = true;
+        } else if (closestTd && !closestTd.previousElementSibling) {
+           isFirstCell = true;
+        }
+
+        // If it's on the left side and small, it's very likely a row selector
+        if (isFirstCell || rect.left < 100) {
+           score += 40;
+        }
+
+        // Heavy boost for pseudo-element wrapper classes
+        if (classNameStr.includes('radio') || classNameStr.includes('checkbox') || classNameStr.includes('indicator') || classNameStr.includes('control') || classNameStr.includes('toggle')) {
+           score += 60;
+        }
+
+        // Demote generic text cells so the actual small control wins
+        if ((tag === 'td' || tag === 'th' || classNameStr.includes('cell')) && !isFirstCell) {
+           score -= 60;
+        }
+
+        // Demote wide full-row wrappers
+        if (rect.width > 300) {
+           score -= 40;
+        }
+
+        if (classNameStr.includes('row') || classNameStr.includes('container') || classNameStr.includes('wrapper')) {
           score -= 20;
         }
 
