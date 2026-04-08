@@ -1014,7 +1014,22 @@ export function buildDashboardHtml(): string {
         priority: index,
         confidence: 0.8,
         action: step.action,
-        value: step.value || ''
+        value: step.value || '',
+        ...(step.action === 'wait' && {
+          wait: {
+            kind: 'text_appears',
+            text: step.value || '',
+            timeout_ms: 10000
+          }
+        }),
+        ...(step.action === 'download' && {
+          download: {
+            mode: 'auto',
+            filename_template: step.value || '',
+            close_popup: true,
+            timeout_ms: 30000
+          }
+        })
       }));
 
       return {
@@ -1353,7 +1368,7 @@ export function buildDashboardHtml(): string {
         actionSelect.className = 'flow-step-action-select';
         actionSelect.dataset.stepIndex = String(index);
 
-        ['click', 'type', 'select'].forEach((actionName) => {
+        ['click', 'type', 'select', 'wait', 'download'].forEach((actionName) => {
           const option = document.createElement('option');
           option.value = actionName;
           option.textContent = actionName.toUpperCase();
@@ -1365,11 +1380,12 @@ export function buildDashboardHtml(): string {
         card.appendChild(actionRow);
 
         const valueRow = document.createElement('div');
-        valueRow.className = 'flow-step-value-row' + ((step.action === 'type' || step.action === 'select' || step.action === 'wait') ? ' visible' : '');
+        valueRow.className = 'flow-step-value-row' + ((step.action === 'type' || step.action === 'select' || step.action === 'wait' || step.action === 'download') ? ' visible' : '');
 
         const valueLabel = document.createElement('label');
         if (step.action === 'select') valueLabel.textContent = 'Option / Value';
         else if (step.action === 'wait') valueLabel.textContent = 'Wait Text / Selector';
+        else if (step.action === 'download') valueLabel.textContent = 'Filename Template';
         else valueLabel.textContent = 'Text / Value';
         valueRow.appendChild(valueLabel);
 
@@ -1378,6 +1394,7 @@ export function buildDashboardHtml(): string {
         valueInput.className = 'flow-step-value-input';
         if (step.action === 'select') valueInput.placeholder = 'Enter option value';
         else if (step.action === 'wait') valueInput.placeholder = 'Enter text to wait for';
+        else if (step.action === 'download') valueInput.placeholder = 'e.g. {{account}}_bill.pdf';
         else valueInput.placeholder = 'Enter text or phone number';
         valueInput.value = step.value || '';
         valueInput.dataset.stepIndex = String(index);
@@ -1491,6 +1508,13 @@ export function buildDashboardHtml(): string {
         });
       }
 
+      if (step.action === 'download') {
+        return await apiCall('POST', '/browser/direct-download', {
+          selector: step.target.cssSelector,
+          value: step.value || ''
+        });
+      }
+
       return null;
     }
 
@@ -1521,6 +1545,9 @@ export function buildDashboardHtml(): string {
         requestBody.value = step.value || '';
       } else if (step.action === 'select') {
         apiPath = '/browser/select';
+        requestBody.value = step.value || '';
+      } else if (step.action === 'download') {
+        apiPath = '/browser/download';
         requestBody.value = step.value || '';
       } else {
         throw new Error('Unsupported action type: ' + step.action);

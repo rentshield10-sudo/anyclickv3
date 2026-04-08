@@ -214,6 +214,14 @@ export interface VariableDefinition {
   };
 }
 
+export interface DownloadConfig {
+  mode?: 'auto';
+  save_dir?: string;
+  filename_template?: string;
+  close_popup?: boolean;
+  timeout_ms?: number;
+}
+
 export interface WaitCondition {
   kind: 'text_appears' | 'selector_appears' | 'selector_disappears' | 'url_change' | 'idle' | 'delay';
   text?: string;

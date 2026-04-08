@@ -237,6 +237,20 @@ async function executeDirectPageAction(
     return;
   }
 
+  if (action === 'download') {
+    // Attempt parsing options from value if provided, or empty config
+    let opts: any = {};
+    if (value) {
+      try { 
+        opts = JSON.parse(value); 
+      } catch {
+        opts.filename_template = value;
+      }
+    }
+    await pw.download(selector, opts);
+    return;
+  }
+
   const locator = page.locator(selector).first();
 
   await locator.scrollIntoViewIfNeeded({ timeout: 1200 }).catch(() => { });
@@ -507,6 +521,31 @@ router.post('/direct-select', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/direct-download', async (req: Request, res: Response) => {
+  try {
+    const { selector, value } = req.body as { selector?: string; value?: string };
+    if (!selector) {
+      res.status(400).json({ ok: false, error: 'selector is required' });
+      return;
+    }
+
+    const page = await pw.getPage();
+    await executeDirectPageAction(page, 'download', selector, value);
+
+    res.json({
+      ok: true,
+      data: {
+        method: 'direct_download',
+        selector,
+        url: page.url(),
+        title: await page.title(),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 router.post('/run-flow', async (req: Request, res: Response) => {
   try {
     interface FlowStepShape {
@@ -672,6 +711,20 @@ router.post('/click', (req, res) =>
 router.post('/type', (req, res) =>
   handleAction(req, res, 'type', async (_page, selector, value) => {
     await pw.type(selector, value || '');
+  })
+);
+
+router.post('/download', (req, res) =>
+  handleAction(req, res, 'download', async (_page, selector, value) => {
+    let opts: any = {};
+    if (value) {
+      try { 
+        opts = JSON.parse(value); 
+      } catch {
+        opts.filename_template = value;
+      }
+    }
+    await pw.download(selector, opts);
   })
 );
 

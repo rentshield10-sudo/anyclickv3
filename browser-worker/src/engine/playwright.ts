@@ -1,4 +1,6 @@
 import { chromium, BrowserContext, Page } from 'playwright';
+import path from 'path';
+import fs from 'fs';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
 import { retry } from '../utils/retry';
@@ -57,6 +59,7 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
     channel: 'chrome',
     executablePath: config.CHROME_EXECUTABLE_PATH,
     headless: false,
+    acceptDownloads: true,
     args: [
       '--no-first-run',
       '--no-default-browser-check',
@@ -293,6 +296,108 @@ export async function waitForChange(timeoutMs = 1_500): Promise<void> {
 export async function screenshot(path?: string): Promise<Buffer> {
   const p = await getPage();
   return await p.screenshot({ path, fullPage: false });
+}
+
+export async function download(selector: string, opts: import('../memory/RecipeMemory').DownloadConfig = {}): Promise<{ saved_path: string; filename: string; source: string }> {
+  await simulateCursor(selector, 'click');
+  const p = await getPage();
+  const timeoutMs = opts.timeout_ms || 30000;
+
+  log.info({ selector, opts }, 'Preparing to trigger download');
+
+  // Set up raw promises without immediate catch, so they don't resolve to null prematurely
+  const downloadPromise = p.waitForEvent('download', { timeout: timeoutMs }).then(d => ({ type: 'download', payload: d }));
+  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs }).then(popup => ({ type: 'popup', payload: popup }));
+
+  const loc = p.locator(selector).first();
+  await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+  await loc.click({ timeout: 5000 }).catch(async () => {
+     await loc.click({ force: true, timeout: 2000 }).catch(async () => {
+         await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
+     });
+  });
+
+  let raceResult: any = null;
+  try {
+     raceResult = await Promise.race([
+        downloadPromise,
+        popupPromise
+     ]);
+  } catch (err: any) {
+     throw new Error(`Click on selector did not trigger a download or a popup within ${timeoutMs}ms.`);
+  }
+
+  let finalDownload = null;
+  let source = 'direct';
+  let popupPage = null;
+
+  if (raceResult.type === 'download' && raceResult.payload) {
+     finalDownload = raceResult.payload;
+  } else if (raceResult.type === 'popup' && raceResult.payload) {
+     popupPage = raceResult.payload as Page;
+     source = 'popup_pdf';
+     log.info('Click opened a new tab/popup. Checking for PDF/viewer download...');
+     
+     try {
+       await popupPage.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+       
+       // Heuristic: Some viewers (like Chrome's native PDF) have a download button in shadow DOM we can trigger
+       const url = popupPage.url().toLowerCase();
+       const title = (await popupPage.title().catch(() => '')).toLowerCase();
+       const isPDF = url.endsWith('.pdf') || title.includes('pdf');
+       
+       if (isPDF) {
+          log.info('Popup appears to be a PDF. Looking for native viewer download button...');
+          // Chrome's PDF viewer has a download button with id "download" inside its shadow root
+          const dlBtn = popupPage.locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]').first();
+          if (await dlBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+             const popupDownloadPromise = popupPage.waitForEvent('download', { timeout: 15000 });
+             await dlBtn.click({ force: true }).catch(() => {});
+             finalDownload = await popupDownloadPromise.catch(() => null);
+          }
+       }
+       
+       if (!finalDownload) {
+           throw new Error('Popup opened but no download event was captured from it.');
+       }
+     } catch (err: any) {
+       if (opts.close_popup && popupPage) {
+           await popupPage.close().catch(() => {});
+       }
+       throw new Error(`Failed to capture download from popup: ${err.message}`);
+     }
+  }
+
+  if (!finalDownload) {
+     throw new Error('Failed to resolve download object.');
+  }
+
+  // Handle the save
+  const suggestedFilename = finalDownload.suggestedFilename() || `download_${Date.now()}.bin`;
+  let filename = opts.filename_template || suggestedFilename;
+  
+  // Clean filename to prevent path traversal
+  filename = filename.replace(/[/\\?%*:|"<>]/g, '_');
+  
+  const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
+  if (!fs.existsSync(saveDir)) {
+    fs.mkdirSync(saveDir, { recursive: true });
+  }
+
+  const savedPath = path.join(saveDir, filename);
+  await finalDownload.saveAs(savedPath);
+
+  if (opts.close_popup && popupPage) {
+      await popupPage.close().catch(() => {});
+  }
+
+  log.info({ savedPath, filename, source }, 'Download completed successfully');
+
+  return {
+    saved_path: path.relative(process.cwd(), savedPath),
+    filename,
+    source
+  };
 }
 
 // ─── Teardown ─────────────────────────────────────────────────────────────────

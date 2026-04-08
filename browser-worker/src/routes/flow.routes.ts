@@ -245,6 +245,25 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
         } else if (action === 'select') {
            await pw.simulateCursor(step.selector, 'select');
            await pw.select(step.selector, valueToType);
+        } else if (action === 'download') {
+           const dlOpts = { ...(step.download || {}) };
+           const filenameTpl = dlOpts.filename_template || valueToType || '';
+           if (filenameTpl) dlOpts.filename_template = filenameTpl;
+           
+           // Support dynamic variable interpolation in filename template
+           if (dlOpts.filename_template && dlOpts.filename_template.includes('{{')) {
+               const match = dlOpts.filename_template.match(/\{\{([^}]+)\}\}/);
+               if (match) {
+                   const varName = match[1].trim();
+                   if (inputs[varName] !== undefined) {
+                       dlOpts.filename_template = dlOpts.filename_template.replace(`{{${varName}}}`, String(inputs[varName]));
+                   }
+               }
+           }
+           
+           const result = await pw.download(step.selector, dlOpts);
+           results.push({ step_id, success: true, download: result });
+           continue; // Skip the standard results.push below to preserve download metadata
         } else {
            throw new Error(`Unsupported action: ${action}`);
         }
