@@ -166,7 +166,13 @@ const INTERACTIVE_SELECTOR = [
   '[class*="row" i]',
   '[class*="item" i]',
   '[class*="clickable" i]',
-  '[class*="selectable" i]'
+  '[class*="selectable" i]',
+  '[class*="radio" i]',
+  '[class*="checkbox" i]',
+  '[class*="indicator" i]',
+  '[class*="control" i]',
+  '[class*="toggle" i]',
+  '[class*="select" i]'
 ].join(', ');
 
 async function extractElements(page: Page): Promise<Element[]> {
@@ -302,17 +308,9 @@ async function extractElements(page: Page): Promise<Element[]> {
       }
 
       function isActuallyVisible(el: HTMLElement, rect: DOMRect, style: CSSStyleDeclaration): boolean {
-        if (style.display === 'none' || style.visibility === 'hidden') return false;
-
-        const isInput = el.tagName === 'INPUT';
-        const isLabel = el.tagName === 'LABEL';
-
-        // Keep 0-opacity inputs and labels because frameworks often hide the real form element and use CSS overlays
-        if (style.opacity === '0' && !isInput && !isLabel) return false;
-        
-        // Keep 0x0 inputs and labels because frameworks often wrap styling overlays with zero-sized logical controls
-        if ((rect.width === 0 || rect.height === 0) && !isInput && !isLabel) return false;
-
+        // Strict visibility for the actual DOM nodes we care about now
+        if (rect.width === 0 || rect.height === 0) return false;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
         return true;
       }
 
@@ -365,6 +363,36 @@ async function extractElements(page: Page): Promise<Element[]> {
         if (seen.has(node)) continue;
         seen.add(node);
         nodes.push(node);
+
+        // EXPANSION RULE 1: If it's a hidden/tiny input, the user sees its wrapper/label instead
+        if (node.tagName === 'INPUT' && (node.getAttribute('type') === 'radio' || node.getAttribute('type') === 'checkbox')) {
+            if (node.parentElement && !seen.has(node.parentElement)) {
+               seen.add(node.parentElement);
+               nodes.push(node.parentElement);
+            }
+            if (node.nextElementSibling && !seen.has(node.nextElementSibling as HTMLElement)) {
+               seen.add(node.nextElementSibling as HTMLElement);
+               nodes.push(node.nextElementSibling as HTMLElement);
+            }
+        }
+
+        // EXPANSION RULE 2: If it's a row, ensure the first cell's contents are aggressively included
+        if (node.tagName === 'TR' || (node.className && typeof node.className === 'string' && node.className.includes('row'))) {
+            const firstChild = node.firstElementChild as HTMLElement;
+            if (firstChild) {
+                if (!seen.has(firstChild)) {
+                    seen.add(firstChild);
+                    nodes.push(firstChild);
+                }
+                const firstCellChildren = Array.from(firstChild.children) as HTMLElement[];
+                for (const fcc of firstCellChildren) {
+                    if (!seen.has(fcc)) {
+                        seen.add(fcc);
+                        nodes.push(fcc);
+                    }
+                }
+            }
+        }
       }
 
       return nodes.map((el, index) => {
