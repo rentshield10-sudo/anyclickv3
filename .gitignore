@@ -11,3 +11,16 @@ browser-worker/dist/
 n8n/.env
 profiles/
 failures/
+browser-worker/downloads/
+browser-worker/cookies*.txt
+browser-worker/*_cookies.json
+browser-worker/*_ls.json
+browser-worker/logs.txt
+browser-worker/startup_logs.txt
+browser-worker/test_logs.txt
+browser-worker/test_nav_logs.txt
+browser-worker/ready_for_user.txt
+browser-worker/user_done.txt
+browser-worker/test_complete.txt
+browser-worker/data/fingerprints/nj.myaccount.pseg.com.json
+patch.diff

@@ -3,8 +3,11 @@ import { getMemoryStore } from '../memory/MemoryStore';
 import { v4 as uuidv4 } from 'uuid';
 import * as pw from '../engine/playwright';
 import type { RecipeEntry } from '../memory/RecipeMemory';
+import { createLogger } from '../utils/logger';
+import { broadcastLog } from '../utils/events';
 
 const router = Router();
+const log = createLogger('flow-routes');
 
 // Helper: Auto-create variable definitions for any templated locators
 function normalizeFlowVariables(flow: any) {
@@ -102,7 +105,10 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
     }
 
     const inputs = req.body.inputs || {};
-    
+    const inputKeys = Object.keys(inputs);
+    log.info({ run_id, flowId, inputs: inputKeys }, 'Flow run started');
+    broadcastLog('info', 'Flow run started', { run_id, flowId, inputs: inputKeys });
+
     // 6a. Validate declared variables
     if (flow.variables) {
       for (const [key, def] of Object.entries(flow.variables)) {
@@ -179,13 +185,18 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
       }
     }
     
-    const results = [];
-    
+    const results: any[] = [];
+
     // 6c. Safely substitute inputs and execute locked steps
     for (let i = 0; i < flow.locators.length; i++) {
       const step = flow.locators[i];
       const step_id = step.step_id || `step_${i.toString().padStart(3, '0')}`;
       
+      const actionType = step.action || 'click';
+      const selector = step.selector || null;
+      log.info({ run_id, flowId, step_id, action: actionType, selector }, 'Flow step start');
+      broadcastLog('info', 'Flow step start', { run_id, flowId, step_id, action: actionType, selector });
+
       try {
         let valueToType = step.value || '';
         
@@ -263,17 +274,23 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
                });
            }
            
-           const result = await pw.download(step.selector, dlOpts);
-           results.push({ step_id, success: true, download: result });
-           continue; // Skip the standard results.push below to preserve download metadata
+            const result = await pw.download(step.selector, dlOpts);
+            log.info({ run_id, flowId, step_id, action, selector: step.selector, download: result }, 'Flow step download success');
+            broadcastLog('info', 'Flow step download success', { run_id, flowId, step_id, selector: step.selector, download: result });
+            results.push({ step_id, success: true, download: result });
+            continue; // Skip the standard results.push below to preserve download metadata
         } else {
-           throw new Error(`Unsupported action: ${action}`);
+            throw new Error(`Unsupported action: ${action}`);
         }
         
         results.push({ step_id, success: true });
+        log.info({ run_id, flowId, step_id, action }, 'Flow step success');
+        broadcastLog('info', 'Flow step success', { run_id, flowId, step_id, action });
         
       } catch(err: any) {
         results.push({ step_id, success: false, error: err.message });
+        log.error({ run_id, flowId, step_id, action: actionType, selector, err: err.message }, 'Flow step failed');
+        broadcastLog('error', 'Flow step failed', { run_id, flowId, step_id, action: actionType, selector, error: err.message });
         
         res.json({
           success: false,
@@ -286,6 +303,9 @@ router.post('/:flowId/run', async (req: Request, res: Response) => {
         return;
       }
     }
+
+    log.info({ run_id, flowId, steps: results.length }, 'Flow run completed');
+    broadcastLog('info', 'Flow run completed', { run_id, flowId, steps: results.length });
 
     res.json({
       success: true,

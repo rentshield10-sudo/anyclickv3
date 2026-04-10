@@ -1,0 +1,27 @@
+[
+  {
+    "site": "nj.myaccount.pseg.com",
+    "pageType": "dashboard",
+    "intent": "download_bill",
+    "fingerprint": {
+      "title": "",
+      "headings": [],
+      "pathPattern": "/api/sitecore/Dashboard/DownloadBill"
+    },
+    "locators": [
+      {
+        "kind": "css_exact",
+        "selector": "#lnkDownloadThisBill",
+        "priority": 0,
+        "confidence": 0.97
+      }
+    ],
+    "fallbackTexts": [],
+    "confidence": 0.99,
+    "lastSuccessAt": "2026-04-10T18:15:34.605Z",
+    "successCount": 2,
+    "failureCount": 0,
+    "stale": false,
+    "id": "flow_1775844232882_29lads"
+  }
+]

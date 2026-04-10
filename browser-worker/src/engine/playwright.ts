@@ -4,11 +4,151 @@ import fs from 'fs';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
 import { retry } from '../utils/retry';
+import { broadcastLog } from '../utils/events';
 
 const log = createLogger('playwright-engine');
 
 let context: BrowserContext | null = null;
 let page: Page | null = null;
+let contextListenersAttached = false;
+let suppressAutoDownload = false;
+
+function attachPageListeners(p: Page) {
+  if ((p as any).__anyclickPageListenersAttached) return;
+  (p as any).__anyclickPageListenersAttached = true;
+
+  p.on('download', (download) => {
+    let suggested = '';
+    try { suggested = download.suggestedFilename(); } catch {}
+    broadcastLog('info', 'Download event detected', {
+      pageUrl: safePageUrl(p),
+      suggested,
+    });
+    log.info({ pageUrl: safePageUrl(p), suggested }, 'Download event detected');
+  });
+
+  p.on('popup', (popup) => {
+    broadcastLog('info', 'Popup window opened', {
+      openerUrl: safePageUrl(p),
+    });
+    log.info({ openerUrl: safePageUrl(p) }, 'Popup window opened');
+    attachPageListeners(popup);
+
+    if (!suppressAutoDownload) {
+      autoCapturePdfFromPage(popup).catch((err) => {
+        log.debug({ err: (err as Error).message }, 'Auto capture from popup rejected');
+      });
+    }
+  });
+
+  p.on('framenavigated', (frame) => {
+    if (frame === p.mainFrame()) {
+      broadcastLog('info', 'Navigation detected', { url: frame.url() });
+      log.info({ url: frame.url() }, 'Navigation detected');
+    }
+  });
+
+  p.on('close', () => {
+    broadcastLog('info', 'Page closed', { url: safePageUrl(p) });
+    log.info({ url: safePageUrl(p) }, 'Page closed');
+    delete (p as any).__anyclickPageListenersAttached;
+  });
+}
+
+function ensureContextListeners(ctx: BrowserContext) {
+  if (contextListenersAttached && (ctx as any).__anyclickContextListenersAttached) {
+    ctx.pages().forEach(attachPageListeners);
+    return;
+  }
+
+  contextListenersAttached = true;
+  (ctx as any).__anyclickContextListenersAttached = true;
+
+  ctx.on('page', (newPage) => {
+    broadcastLog('info', 'New page created', { url: safePageUrl(newPage) });
+    log.info({ url: safePageUrl(newPage) }, 'New page created');
+    attachPageListeners(newPage);
+
+    if (!suppressAutoDownload) {
+      autoCapturePdfFromPage(newPage).catch(() => {});
+    }
+  });
+
+  ctx.on('close', () => {
+    broadcastLog('warn', 'Browser context closed by Chrome');
+    log.warn('Browser context closed by Chrome');
+    contextListenersAttached = false;
+    suppressAutoDownload = false;
+  });
+
+  ctx.pages().forEach(attachPageListeners);
+}
+
+function safePageUrl(p: Page | null | undefined): string {
+  if (!p) return '(unknown)';
+  try {
+    return p.url();
+  } catch {
+    return '(unavailable)';
+  }
+}
+
+async function autoCapturePdfFromPage(
+  popup: Page,
+  opts: { save_dir?: string; filename_template?: string } = {}
+) {
+  if ((popup as any).__anyclickAutoDownloadAttempted) return null;
+  (popup as any).__anyclickAutoDownloadAttempted = true;
+
+  try {
+    await popup.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+    await popup.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => {});
+
+    let popupUrl = safePageUrl(popup);
+    if (!popupUrl || popupUrl === 'about:blank') {
+      await popup.waitForEvent('framenavigated', { timeout: 5_000 }).catch(() => null);
+      popupUrl = safePageUrl(popup);
+    }
+
+    if (!popupUrl || popupUrl === 'about:blank') {
+      return null;
+    }
+
+    const response = await popup.context().request.get(popupUrl, {
+      timeout: 30_000,
+      failOnStatusCode: false,
+    });
+
+    const status = response.status();
+    const headers = response.headers();
+    const contentType = (headers['content-type'] || '').toLowerCase();
+    const bytes = Buffer.from(await response.body());
+
+    const looksPdf =
+      contentType.includes('application/pdf') ||
+      popupUrl.toLowerCase().includes('.pdf') ||
+      popupUrl.toLowerCase().includes('download');
+
+    if (status >= 200 && status < 300 && bytes.length > 0 && looksPdf) {
+      const saved = saveBufferDownload(bytes, opts, popupUrl, 'popup_auto_pdf');
+      broadcastLog('info', 'Popup PDF captured automatically', {
+        url: popupUrl,
+        saved_path: saved.saved_path,
+      });
+      log.info({ url: popupUrl, saved_path: saved.saved_path }, 'Popup PDF captured automatically');
+
+      if (!popup.isClosed()) {
+        await popup.close().catch(() => {});
+      }
+
+      return saved;
+    }
+  } catch (err) {
+    log.debug({ err: (err as Error).message, url: safePageUrl(popup) }, 'Auto capture attempt failed');
+  }
+
+  return null;
+}
 
 // ─── Launch / Reuse ───────────────────────────────────────────────────────────
 
@@ -29,6 +169,8 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
           throw new Error('No pages left in context');
       }
       
+      ensureContextListeners(context);
+      attachPageListeners(page);
       return { context, page };
     } catch {
       log.warn('Browser or active page was closed externally. Attempting to recover existing context or rebooting...');
@@ -38,10 +180,14 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
            const pages = context.pages();
            if (pages.length > 0) {
                page = pages[0];
-               return { context, page };
+                ensureContextListeners(context);
+                attachPageListeners(page);
+                return { context, page };
            } else {
                page = await context.newPage();
-               return { context, page };
+                ensureContextListeners(context);
+                attachPageListeners(page);
+                return { context, page };
            }
         }
       } catch {
@@ -50,6 +196,7 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
 
       context = null;
       page = null;
+      contextListenersAttached = false;
     }
   }
 
@@ -90,6 +237,9 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
   } else {
     page = await context.newPage();
   }
+
+  ensureContextListeners(context);
+  attachPageListeners(page);
 
   log.info('Chrome launched successfully');
   return { context, page };
@@ -317,13 +467,20 @@ function buildDefaultFilename(
   }
 
   if (suggested && suggested.trim()) {
-    return sanitizeFilename(suggested);
+    const trimmed = suggested.trim();
+    const baseForExt = trimmed.split('?')[0].split('#')[0];
+    const ext = path.extname(baseForExt);
+
+    if (ext && ext.length > 1) {
+      return sanitizeFilename(trimmed);
+    }
   }
 
   const ts = Date.now();
 
   const looksPdf =
     source === 'popup_pdf' ||
+    source === 'direct_fetch_pdf' ||
     !!popupUrl?.toLowerCase().includes('.pdf');
 
   if (looksPdf) {
@@ -361,116 +518,188 @@ async function trySaveDownload(
   };
 }
 
+function saveBufferDownload(
+  buffer: Buffer,
+  opts: { save_dir?: string; filename_template?: string },
+  downloadUrl: string | null,
+  source: string
+) {
+  const filename = buildDefaultFilename(null, opts.filename_template, downloadUrl, source);
+  const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
+  ensureDir(saveDir);
+  const savedPath = path.join(saveDir, filename);
+  fs.writeFileSync(savedPath, buffer);
+
+  return {
+    saved_path: path.relative(process.cwd(), savedPath),
+    filename,
+    source,
+  };
+}
+
 export async function download(
   selector: string,
   opts: import('../memory/RecipeMemory').DownloadConfig = {}
 ): Promise<{ saved_path: string; filename: string; source: string }> {
-  await simulateCursor(selector, 'click');
-
-  const p = await getPage();
-  const timeoutMs = opts.timeout_ms || 30000;
-  const loc = p.locator(selector).first();
-
-  await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-
-  const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs });
-  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs });
-
-  await loc.click({ timeout: 5000 }).catch(async () => {
-    await loc.click({ force: true, timeout: 2000 }).catch(async () => {
-      await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
-    });
-  });
-
+  const previousSuppress = suppressAutoDownload;
+  suppressAutoDownload = true;
   try {
-    const direct = await Promise.race([
-      directDownloadPromise.then((d) => ({ kind: 'download' as const, d })),
-      popupPromise.then((popup) => ({ kind: 'popup' as const, popup })),
-    ]);
+    await simulateCursor(selector, 'click');
 
-    if (direct.kind === 'download') {
-      return await trySaveDownload(direct.d, opts, null, 'direct');
-    }
+    const p = await getPage();
+    const timeoutMs = opts.timeout_ms || 30_000;
+    const loc = p.locator(selector).first();
 
-    const popupPage = direct.popup as Page;
-    const popupUrlBefore = popupPage.url() || null;
+    await loc.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
 
+    await loc
+      .evaluate((node: HTMLElement) => {
+        if (node.hasAttribute('target')) {
+          node.removeAttribute('target');
+        }
+      })
+      .catch(() => {});
+
+    let resolvedUrl: string | null = null;
     try {
-      await popupPage.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-      await popupPage.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      const href = await loc.getAttribute('href');
+      if (href) {
+        resolvedUrl = new URL(href, p.url()).toString();
+      }
     } catch {}
 
-    const popupUrl = popupPage.url() || popupUrlBefore || null;
-    let popupTitle = '';
-    try { popupTitle = await popupPage.title(); } catch {}
-    const lowerUrl = (popupUrl || '').toLowerCase();
-    const lowerTitle = popupTitle.toLowerCase();
+    const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs });
+    const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs });
 
-    const isLikelyPdf =
-      lowerUrl.includes('.pdf') ||
-      lowerTitle.includes('pdf') ||
-      lowerUrl.startsWith('blob:');
+    await loc.click({ timeout: 5_000 }).catch(async () => {
+      await loc.click({ force: true, timeout: 2_000 }).catch(async () => {
+        await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
+      });
+    });
 
-    const popupNaturalDownload = await popupPage
-      .waitForEvent('download', { timeout: 2500 })
-      .catch(() => null);
+    try {
+      const direct = await Promise.race([
+        directDownloadPromise.then((d) => ({ kind: 'download' as const, d })),
+        popupPromise.then((popup) => ({ kind: 'popup' as const, popup })),
+      ]);
 
-    if (popupNaturalDownload) {
-      const result = await trySaveDownload(popupNaturalDownload, opts, popupUrl, 'popup_pdf');
-      if (opts.close_popup !== false) {
-        await popupPage.close().catch(() => {});
+      if (direct.kind === 'download') {
+        return await trySaveDownload(direct.d, opts, null, 'direct');
       }
-      return result;
-    }
 
-    if (isLikelyPdf && popupUrl && !popupUrl.startsWith('blob:')) {
-      const filename = buildDefaultFilename(undefined, opts.filename_template, popupUrl, 'popup_pdf');
-      const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
-      ensureDir(saveDir);
-      const savedPath = path.join(saveDir, filename);
+      const popupPage = direct.popup as Page;
+      const popupUrlBefore = popupPage.url() || null;
 
-      const bytes = await popupPage.evaluate(async (url) => {
-        const res = await fetch(url, { credentials: 'include' });
-        if (!res.ok) throw new Error(`Failed to fetch popup PDF URL: ${res.status}`);
-        const buf = await res.arrayBuffer();
-        return Array.from(new Uint8Array(buf));
-      }, popupUrl).catch(() => null);
+      try {
+        await popupPage.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+        await popupPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+      } catch {}
 
-      if (bytes && bytes.length > 0) {
-        fs.writeFileSync(savedPath, Buffer.from(bytes));
-        if (opts.close_popup !== false) {
-          await popupPage.close().catch(() => {});
-        }
-        return {
-          saved_path: path.relative(process.cwd(), savedPath),
-          filename,
-          source: 'popup_pdf',
-        };
-      }
-    }
+      const popupUrl = popupPage.url() || popupUrlBefore || null;
+      let popupTitle = '';
+      try {
+        popupTitle = await popupPage.title();
+      } catch {}
+      const lowerUrl = (popupUrl || '').toLowerCase();
+      const lowerTitle = popupTitle.toLowerCase();
 
-    const viewerDownloadPromise = popupPage.waitForEvent('download', { timeout: 10000 }).catch(() => null);
+      const isLikelyPdf =
+        lowerUrl.includes('.pdf') ||
+        lowerTitle.includes('pdf') ||
+        lowerUrl.startsWith('blob:');
 
-    const dlBtn = popupPage
-      .locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]')
-      .first();
+      const popupNaturalDownload = await popupPage
+        .waitForEvent('download', { timeout: 2_500 })
+        .catch(() => null);
 
-    if (await dlBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await dlBtn.click({ force: true }).catch(() => {});
-      const viewerDownload = await viewerDownloadPromise;
-
-      if (viewerDownload) {
-        const result = await trySaveDownload(viewerDownload, opts, popupUrl, 'popup_pdf');
+      if (popupNaturalDownload) {
+        const result = await trySaveDownload(popupNaturalDownload, opts, popupUrl, 'popup_pdf');
         if (opts.close_popup !== false) {
           await popupPage.close().catch(() => {});
         }
         return result;
       }
-    }
 
-    throw new Error('Popup opened, but no downloadable file could be captured automatically.');
-  } catch (err: any) {
-    throw new Error(`Download failed: ${err.message}`);
+      if (isLikelyPdf && popupUrl && !popupUrl.startsWith('blob:')) {
+        const filename = buildDefaultFilename(undefined, opts.filename_template, popupUrl, 'popup_pdf');
+        const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
+        ensureDir(saveDir);
+        const savedPath = path.join(saveDir, filename);
+
+        const bytes = await popupPage
+          .evaluate(async (url) => {
+            const res = await fetch(url, { credentials: 'include' });
+            if (!res.ok) throw new Error(`Failed to fetch popup PDF URL: ${res.status}`);
+            const buf = await res.arrayBuffer();
+            return Array.from(new Uint8Array(buf));
+          }, popupUrl)
+          .catch(() => null);
+
+        if (bytes && bytes.length > 0) {
+          fs.writeFileSync(savedPath, Buffer.from(bytes));
+          if (opts.close_popup !== false) {
+            await popupPage.close().catch(() => {});
+          }
+          return {
+            saved_path: path.relative(process.cwd(), savedPath),
+            filename,
+            source: 'popup_pdf',
+          };
+        }
+      }
+
+      const viewerDownloadPromise = popupPage.waitForEvent('download', { timeout: 10_000 }).catch(() => null);
+
+      const dlBtn = popupPage
+        .locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]')
+        .first();
+
+      if (await dlBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await dlBtn.click({ force: true }).catch(() => {});
+        const viewerDownload = await viewerDownloadPromise;
+
+        if (viewerDownload) {
+          const result = await trySaveDownload(viewerDownload, opts, popupUrl, 'popup_pdf');
+          if (opts.close_popup !== false) {
+            await popupPage.close().catch(() => {});
+          }
+          return result;
+        }
+      }
+
+      if (opts.close_popup !== false) {
+        await popupPage.close().catch(() => {});
+      }
+      throw new Error('Popup opened, but no downloadable file could be captured automatically.');
+    } catch (err: any) {
+      if (resolvedUrl) {
+        try {
+          const response = await p.context().request.get(resolvedUrl, {
+            timeout: timeoutMs,
+            failOnStatusCode: false,
+          });
+
+          const status = response.status();
+          const headers = response.headers();
+          const contentType = (headers['content-type'] || '').toLowerCase();
+          const bytes = Buffer.from(await response.body());
+
+          if (
+            status >= 200 && status < 300 &&
+            bytes.length > 0 &&
+            (contentType.includes('application/pdf') || resolvedUrl.toLowerCase().includes('.pdf'))
+          ) {
+            return saveBufferDownload(bytes, opts, resolvedUrl, 'direct_fetch_pdf');
+          }
+        } catch (fetchErr) {
+          log.warn({ err: (fetchErr as Error).message, url: resolvedUrl }, 'Fallback direct download failed');
+        }
+      }
+
+      throw new Error(`Download failed: ${err.message}`);
+    }
+  } finally {
+    suppressAutoDownload = previousSuppress;
   }
 }
 
@@ -481,6 +710,8 @@ export async function closeBrowser(): Promise<void> {
     await context.close();
     context = null;
     page = null;
+    contextListenersAttached = false;
+    suppressAutoDownload = false;
     log.info('Browser closed');
   }
 }

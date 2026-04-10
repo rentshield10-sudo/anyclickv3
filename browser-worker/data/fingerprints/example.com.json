@@ -1,0 +1,17 @@
+[
+  {
+    "site": "example.com",
+    "hostname": "example.com",
+    "pathPattern": "/",
+    "title": "Example Domain",
+    "headings": [
+      "Example Domain"
+    ],
+    "navLabels": [],
+    "formLabels": [],
+    "pageType": "unknown",
+    "id": "fp_1775759072025_cp9b8a",
+    "matchCount": 0,
+    "lastSeenAt": "2026-04-09T18:33:50.863Z"
+  }
+]

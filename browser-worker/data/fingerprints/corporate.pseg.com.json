@@ -1,0 +1,60 @@
+[
+  {
+    "site": "corporate.pseg.com",
+    "hostname": "corporate.pseg.com",
+    "pathPattern": "/",
+    "title": "PSEG Corporate Home Page",
+    "headings": [
+      "Contact Us",
+      "My Profile",
+      "Contact Us",
+      "My Profile",
+      "My Profile",
+      "Where Do You Have Service?",
+      "National Honors for PSEG Community Impact",
+      "PSEG IN THE NEWS",
+      "PSE&G scam alert issued amid rise in utility impersonation fraud",
+      "ROI NJ: Choose New Jersey names Herbold as next president and CEO",
+      "Hoboken, PSE&G, and NHSA to upgrade, pave 2 miles of roadway this spring",
+      "BINJE’s Best: Top Women in Business issue is out",
+      "AWARDS & RECOGNITION",
+      "PSEG named a 2025 Most Trusted Brand for 2025",
+      "Not Registered for My Account?"
+    ],
+    "navLabels": [
+      "PSEG Corporate",
+      "PSE&G",
+      "PSEG Long Island",
+      "PSEG Power",
+      "Please click on search icon.",
+      "×",
+      "CONTACT US",
+      "Media Contacts",
+      "Have a Request?",
+      "PSE&G Customer Support",
+      "1-800-436-7734",
+      "PSEG Retirees and Surviving Spouses",
+      "1-855-697-7341",
+      "PSEG Long Island Customer Support",
+      "1-800-490-0025",
+      "View All Customer Service Center Locations",
+      "connect to facebook",
+      "connect to instagram",
+      "connect to linkedin",
+      "connect to twitter"
+    ],
+    "formLabels": [
+      "Search Field in Overlay",
+      "Search Input Field in Contact Us",
+      "Address Field in Contact Us",
+      "Search input field in Contact Us in devices",
+      "Address Field in Contact Us in Devices",
+      "Search Field in devices",
+      "Search Field inside overlay in sticky"
+    ],
+    "pageType": "dashboard",
+    "id": "fp_1775778012062_n9t9ow",
+    "matchCount": 0,
+    "lastSeenAt": "2026-04-09T23:40:12.062Z"
+  }
+]

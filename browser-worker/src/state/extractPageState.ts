@@ -58,19 +58,6 @@ export async function extractPageState(page: Page): Promise<PageState> {
     loading: { networkBusy: false, spinnerVisible },
   };
 
-  const bodyTextLen = await page.evaluate(() => document.body.innerText.length).catch(() => 0);
-  log.info(
-    {
-      url,
-      bodyTextLen,
-      mainTextLen: mainPanel.text.length,
-      rightTextLen: rightPanel.text.length,
-      leftTextLen: leftPanel.text.length,
-      elementCount: elements.length,
-    },
-    'TEMP DEBUG extractPageState'
-  );
-
   log.debug({ url, elementCount: elements.length }, 'Page state extracted');
   return state;
 }
