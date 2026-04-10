@@ -8,13 +8,19 @@ import { broadcastLog } from '../utils/events';
 
 type DownloadConfig = import('../memory/RecipeMemory').DownloadConfig;
 
+const RETRO_POINTER_SVG = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" shape-rendering="crispEdges" style="display:block">
+    <polygon fill="#ffffff" points="0,0 0,20 5,15 7,22 10,22 8,15 18,15" />
+    <polyline fill="none" stroke="#000000" stroke-width="2" stroke-linejoin="miter"
+      points="0,0 0,20 5,15 7,22 10,22 8,15 18,15" />
+  </svg>
+`;
+
 const log = createLogger('playwright-engine');
 
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 let contextListenersAttached = false;
-let downloadModeActive = false;
-let pendingDownloadOptions: DownloadConfig | undefined;
 function attachPageListeners(p: Page) {
   if ((p as any).__anyclickPageListenersAttached) return;
   (p as any).__anyclickPageListenersAttached = true;
@@ -36,7 +42,7 @@ function attachPageListeners(p: Page) {
     log.info({ openerUrl: safePageUrl(p) }, 'Popup window opened');
     attachPageListeners(popup);
 
-    autoCapturePdfFromPage(popup, pendingDownloadOptions || {}).catch((err) => {
+    autoCapturePdfFromPage(popup).catch((err) => {
       log.debug({ err: (err as Error).message }, 'Auto capture from popup rejected (listener)');
     });
 
@@ -70,7 +76,7 @@ function ensureContextListeners(ctx: BrowserContext) {
     log.info({ url: safePageUrl(newPage) }, 'New page created');
     attachPageListeners(newPage);
 
-    autoCapturePdfFromPage(newPage, pendingDownloadOptions || {}).catch(() => {});
+    autoCapturePdfFromPage(newPage).catch(() => {});
 
   });
 
@@ -279,77 +285,125 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
     const locator = p.locator(selector).first();
     
     // Attempt evaluation with a short timeout. If element is not attached yet, just skip demo cursor gracefully.
-    await locator.evaluate(async (el: HTMLElement, action: string) => {
-      // 1. Ensure fake cursor exists
-      let cursor = document.getElementById('anyclick-demo-cursor');
-      if (!cursor) {
-        cursor = document.createElement('div');
-        cursor.id = 'anyclick-demo-cursor';
+    await locator.evaluate(
+      async (
+        el: HTMLElement,
+        payload: { action: string; svg: string }
+      ) => {
+        const CURSOR_WIDTH = 24;
+        const CURSOR_HEIGHT = 24;
+        const HOTSPOT_X = 1.5;
+        const HOTSPOT_Y = 2;
 
-        Object.assign(cursor.style, {
-          width: '24px',
-          height: '32px',
-          position: 'fixed',
-          pointerEvents: 'none',
-          zIndex: '2147483647',
-          filter: 'drop-shadow(0 3px 8px rgba(0,0,0,0.35))',
-          left: `${window.innerWidth / 2}px`,
-          top: `${window.innerHeight / 2}px`,
-          transform: 'translate(0, 0)'
+        let host = document.getElementById('anyclick-demo-cursor') as HTMLDivElement | null;
+        let inner: HTMLDivElement;
+
+        if (!host) {
+          host = document.createElement('div');
+          host.id = 'anyclick-demo-cursor';
+          Object.assign(host.style, {
+            position: 'fixed',
+            pointerEvents: 'none',
+            zIndex: '2147483647',
+            width: `${CURSOR_WIDTH}px`,
+            height: `${CURSOR_HEIGHT}px`,
+            left: '0px',
+            top: '0px'
+          });
+
+          inner = document.createElement('div');
+          inner.className = 'anyclick-demo-cursor-inner';
+          Object.assign(inner.style, {
+            position: 'absolute',
+            top: '0',
+            left: '0',
+            width: '100%',
+            height: '100%',
+            filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.4))',
+            transformOrigin: `${HOTSPOT_X}px ${HOTSPOT_Y}px`
+          });
+          inner.innerHTML = payload.svg;
+          host.appendChild(inner);
+          (document.documentElement || document.body).appendChild(host);
+        } else {
+          inner = host.querySelector<HTMLDivElement>('.anyclick-demo-cursor-inner') || document.createElement('div');
+          if (!inner.parentElement) {
+            host.appendChild(inner);
+          }
+        }
+
+        host.style.width = `${CURSOR_WIDTH}px`;
+        host.style.height = `${CURSOR_HEIGHT}px`;
+
+        Object.assign(inner.style, {
+          position: 'absolute',
+          top: '0',
+          left: '0',
+          width: '100%',
+          height: '100%',
+          filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.4))',
+          transformOrigin: `${HOTSPOT_X}px ${HOTSPOT_Y}px`
         });
+        if (inner.innerHTML !== payload.svg) {
+          inner.innerHTML = payload.svg;
+        }
+        if (!host.parentElement) {
+          (document.documentElement || document.body).appendChild(host);
+        }
 
-        cursor.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 24" preserveAspectRatio="xMinYMin meet" style="width:100%;height:100%;display:block;image-rendering:pixelated;">
-            <polygon points="0,0 0,23 4,23 5,24 7,24 8,23 15,23 15,10 11,14 9,12 7,14 7,0" fill="#000" />
-            <polygon points="1,1 1,22 4.5,22 6,24 7,24 8,22 14,22 14,12 11,15 9,13 7,15 7,1" fill="#fff" />
-          </svg>
-        `;
-        document.body.appendChild(cursor);
-        
-        // Force reflow
-        void cursor.offsetHeight;
-      }
+        // 2. Highlight target
+        const originalOutline = el.style.outline;
+        const originalOutlineOffset = el.style.outlineOffset;
+        el.style.outline = '3px solid rgba(239, 68, 68, 0.6)';
+        el.style.outlineOffset = '2px';
 
-      // 2. Highlight target
-      const originalOutline = el.style.outline;
-      const originalOutlineOffset = el.style.outlineOffset;
-      el.style.outline = '3px solid rgba(239, 68, 68, 0.6)';
-      el.style.outlineOffset = '2px';
+        // 3. Position host using hotspot offsets and clamp to viewport
+        const rect = el.getBoundingClientRect();
+        const targetX = rect.left + rect.width / 2;
+        const targetY = rect.top + rect.height / 2;
+        const viewportWidth = document.documentElement.clientWidth || window.innerWidth || CURSOR_WIDTH;
+        const viewportHeight = document.documentElement.clientHeight || window.innerHeight || CURSOR_HEIGHT;
 
-      // 3. Move cursor to center of target
-      const rect = el.getBoundingClientRect();
-      const targetX = rect.left + rect.width / 2;
-      const targetY = rect.top + rect.height / 2;
-      const pointerTipX = 3;
-      const pointerTipY = 4;
+        let hostLeft = targetX - HOTSPOT_X;
+        let hostTop = targetY - HOTSPOT_Y;
+        hostLeft = Math.min(Math.max(0, hostLeft), Math.max(0, viewportWidth - CURSOR_WIDTH));
+        hostTop = Math.min(Math.max(0, hostTop), Math.max(0, viewportHeight - CURSOR_HEIGHT));
 
-      cursor.style.left = `${targetX - pointerTipX}px`;
-      cursor.style.top = `${targetY - pointerTipY}px`;
-      cursor.style.transform = 'translate(0, 0)';
+        host.style.left = `${hostLeft}px`;
+        host.style.top = `${hostTop}px`;
+        host.style.transform = 'none';
+        inner.style.transform = 'scale(1)';
 
-      // 4. Wait for move to finish
-      await new Promise(r => setTimeout(r, 300));
+        // 4. Wait for move to finish
+        await new Promise(r => setTimeout(r, 300));
 
-      // 5. Action specific visual (click ripple/squish)
-      if (action === 'click') {
-        cursor.animate([
-          { transform: 'translate(0, 0)' },
-          { transform: 'translate(1px, 1px)' },
-          { transform: 'translate(0, 0)' }
-        ], {
-          duration: 200,
-          easing: 'ease-out'
-        });
-        await new Promise(r => setTimeout(r, 200));
-      }
+        // 5. Action specific visual (click ripple/squish)
+        if (payload.action === 'click') {
+          inner.getAnimations().forEach(a => a.cancel());
+          inner.animate(
+            [
+              { transform: 'scale(1)' },
+              { transform: 'scale(0.92)' },
+              { transform: 'scale(1.05)' },
+              { transform: 'scale(1)' }
+            ],
+            {
+              duration: 200,
+              easing: 'cubic-bezier(0.25, 1, 0.5, 1)'
+            }
+          );
+          await new Promise(r => setTimeout(r, 200));
+        }
 
-      // 6. Restore highlight
-      setTimeout(() => {
-        el.style.outline = originalOutline;
-        el.style.outlineOffset = originalOutlineOffset;
-      }, 300);
+        // 6. Restore highlight
+        setTimeout(() => {
+          el.style.outline = originalOutline;
+          el.style.outlineOffset = originalOutlineOffset;
+        }, 300);
 
-    }, actionType, { timeout: 1500 });
+      },
+      { action: actionType, svg: RETRO_POINTER_SVG }
+    );
   } catch (err) {
     log.trace({ err: (err as Error).message }, 'Demo cursor simulation skipped or failed (non-fatal)');
   }
@@ -615,10 +669,6 @@ export async function download(
   selector: string,
   opts: DownloadConfig = {}
 ): Promise<{ saved_path: string; filename: string; source: string }> {
-  const previousDownloadMode = downloadModeActive;
-  const previousPendingOpts = pendingDownloadOptions;
-  downloadModeActive = true;
-  pendingDownloadOptions = opts;
   await simulateCursor(selector, 'click');
 
   const p = await getPage();
@@ -754,9 +804,6 @@ export async function download(
     }
 
     throw new Error(`Download failed: ${err.message}`);
-  } finally {
-    downloadModeActive = previousDownloadMode;
-    pendingDownloadOptions = previousPendingOpts;
   }
 }
 
@@ -768,7 +815,6 @@ export async function closeBrowser(): Promise<void> {
     context = null;
     page = null;
     contextListenersAttached = false;
-    downloadModeActive = false;
     log.info('Browser closed');
   }
 }
