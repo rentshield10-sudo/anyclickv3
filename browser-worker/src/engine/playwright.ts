@@ -6,13 +6,15 @@ import { createLogger } from '../utils/logger';
 import { retry } from '../utils/retry';
 import { broadcastLog } from '../utils/events';
 
+type DownloadConfig = import('../memory/RecipeMemory').DownloadConfig;
+
 const log = createLogger('playwright-engine');
 
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 let contextListenersAttached = false;
-let suppressAutoDownload = false;
-
+let downloadModeActive = false;
+let pendingDownloadOptions: DownloadConfig | undefined;
 function attachPageListeners(p: Page) {
   if ((p as any).__anyclickPageListenersAttached) return;
   (p as any).__anyclickPageListenersAttached = true;
@@ -34,11 +36,10 @@ function attachPageListeners(p: Page) {
     log.info({ openerUrl: safePageUrl(p) }, 'Popup window opened');
     attachPageListeners(popup);
 
-    if (!suppressAutoDownload) {
-      autoCapturePdfFromPage(popup).catch((err) => {
-        log.debug({ err: (err as Error).message }, 'Auto capture from popup rejected');
-      });
-    }
+    autoCapturePdfFromPage(popup, pendingDownloadOptions || {}).catch((err) => {
+      log.debug({ err: (err as Error).message }, 'Auto capture from popup rejected (listener)');
+    });
+
   });
 
   p.on('framenavigated', (frame) => {
@@ -69,16 +70,14 @@ function ensureContextListeners(ctx: BrowserContext) {
     log.info({ url: safePageUrl(newPage) }, 'New page created');
     attachPageListeners(newPage);
 
-    if (!suppressAutoDownload) {
-      autoCapturePdfFromPage(newPage).catch(() => {});
-    }
+    autoCapturePdfFromPage(newPage, pendingDownloadOptions || {}).catch(() => {});
+
   });
 
   ctx.on('close', () => {
     broadcastLog('warn', 'Browser context closed by Chrome');
     log.warn('Browser context closed by Chrome');
     contextListenersAttached = false;
-    suppressAutoDownload = false;
   });
 
   ctx.pages().forEach(attachPageListeners);
@@ -286,20 +285,25 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
       if (!cursor) {
         cursor = document.createElement('div');
         cursor.id = 'anyclick-demo-cursor';
+
         Object.assign(cursor.style, {
-          width: '20px',
-          height: '20px',
-          background: 'rgba(239, 68, 68, 0.8)',
-          border: '2px solid white',
-          borderRadius: '50%',
+          width: '24px',
+          height: '32px',
           position: 'fixed',
           pointerEvents: 'none',
           zIndex: '2147483647',
-          transition: 'all 0.4s cubic-bezier(0.25, 1, 0.5, 1)',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+          filter: 'drop-shadow(0 3px 8px rgba(0,0,0,0.35))',
           left: `${window.innerWidth / 2}px`,
-          top: `${window.innerHeight / 2}px`
+          top: `${window.innerHeight / 2}px`,
+          transform: 'translate(0, 0)'
         });
+
+        cursor.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 24" preserveAspectRatio="xMinYMin meet" style="width:100%;height:100%;display:block;image-rendering:pixelated;">
+            <polygon points="0,0 0,23 4,23 5,24 7,24 8,23 15,23 15,10 11,14 9,12 7,14 7,0" fill="#000" />
+            <polygon points="1,1 1,22 4.5,22 6,24 7,24 8,22 14,22 14,12 11,15 9,13 7,15 7,1" fill="#fff" />
+          </svg>
+        `;
         document.body.appendChild(cursor);
         
         // Force reflow
@@ -316,24 +320,27 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
       const rect = el.getBoundingClientRect();
       const targetX = rect.left + rect.width / 2;
       const targetY = rect.top + rect.height / 2;
+      const pointerTipX = 3;
+      const pointerTipY = 4;
 
-      cursor.style.transform = 'translate(-50%, -50%) scale(1)';
-      cursor.style.left = `${targetX}px`;
-      cursor.style.top = `${targetY}px`;
+      cursor.style.left = `${targetX - pointerTipX}px`;
+      cursor.style.top = `${targetY - pointerTipY}px`;
+      cursor.style.transform = 'translate(0, 0)';
 
       // 4. Wait for move to finish
-      await new Promise(r => setTimeout(r, 450));
+      await new Promise(r => setTimeout(r, 300));
 
       // 5. Action specific visual (click ripple/squish)
       if (action === 'click') {
-        cursor.style.transform = 'translate(-50%, -50%) scale(0.6)';
-        cursor.style.background = 'rgba(220, 38, 38, 1)';
-        await new Promise(r => setTimeout(r, 150));
-        cursor.style.transform = 'translate(-50%, -50%) scale(1.2)';
-        cursor.style.background = 'rgba(239, 68, 68, 0.4)';
-        await new Promise(r => setTimeout(r, 100));
-        cursor.style.transform = 'translate(-50%, -50%) scale(1)';
-        cursor.style.background = 'rgba(239, 68, 68, 0.8)';
+        cursor.animate([
+          { transform: 'translate(0, 0)' },
+          { transform: 'translate(1px, 1px)' },
+          { transform: 'translate(0, 0)' }
+        ], {
+          duration: 200,
+          easing: 'ease-out'
+        });
+        await new Promise(r => setTimeout(r, 200));
       }
 
       // 6. Restore highlight
@@ -456,11 +463,42 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[/\\?%*:|"<>]/g, '_').trim();
 }
 
+function hasExtension(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const baseForExt = trimmed.split('?')[0].split('#')[0];
+  const ext = path.extname(baseForExt);
+  return !!(ext && ext.length > 1);
+}
+
+function parseContentDispositionFilename(disposition: string | undefined): string | null {
+  if (!disposition) return null;
+
+  const starMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8''|"?)([^;]+)/i);
+  if (starMatch && starMatch[1]) {
+    const raw = starMatch[1].trim().replace(/^"|"$/g, '');
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  const match = disposition.match(/filename\s*=\s*"?([^";]+)"?/i);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+
+  return null;
+}
+
 function buildDefaultFilename(
   suggested: string | null | undefined,
   optsFilename: string | undefined,
-  popupUrl: string | null,
-  source: string
+  sourceUrl: string | null,
+  source: string,
+  contentType?: string
 ): string {
   if (optsFilename && optsFilename.trim()) {
     return sanitizeFilename(optsFilename);
@@ -478,10 +516,23 @@ function buildDefaultFilename(
 
   const ts = Date.now();
 
+  if (!hasExtension(suggested) && sourceUrl) {
+    try {
+      const sanitizedUrl = new URL(sourceUrl);
+      const urlPath = sanitizedUrl.pathname.split('/').filter(Boolean).pop() || '';
+      const ext = path.extname(urlPath);
+      if (ext && ext.length > 1) {
+        return sanitizeFilename(urlPath);
+      }
+    } catch {}
+  }
+
+  const lowerContentType = contentType?.toLowerCase() || '';
   const looksPdf =
     source === 'popup_pdf' ||
     source === 'direct_fetch_pdf' ||
-    !!popupUrl?.toLowerCase().includes('.pdf');
+    lowerContentType.includes('application/pdf') ||
+    !!sourceUrl?.toLowerCase().includes('.pdf');
 
   if (looksPdf) {
     return `bill_${ts}.pdf`;
@@ -498,11 +549,28 @@ async function trySaveDownload(
 ) {
   let suggested = '';
   try { suggested = download.suggestedFilename(); } catch {}
+  let downloadUrl: string | null = null;
+  try { downloadUrl = download.url(); } catch {}
+  let contentType = '';
+  try {
+    const response = await download.response();
+    const headers = response?.headers() || {};
+    contentType = headers['content-type'] || headers['Content-Type'] || '';
+    if (!hasExtension(suggested)) {
+      const dispositionName = parseContentDispositionFilename(
+        headers['content-disposition'] || headers['Content-Disposition']
+      );
+      if (dispositionName) {
+        suggested = dispositionName;
+      }
+    }
+  } catch {}
   const filename = buildDefaultFilename(
     suggested,
     opts.filename_template,
-    popupUrl,
-    source
+    downloadUrl ?? popupUrl,
+    source,
+    contentType
   );
 
   const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
@@ -524,7 +592,13 @@ function saveBufferDownload(
   downloadUrl: string | null,
   source: string
 ) {
-  const filename = buildDefaultFilename(null, opts.filename_template, downloadUrl, source);
+  const filename = buildDefaultFilename(
+    null,
+    opts.filename_template,
+    downloadUrl,
+    source,
+    source.includes('pdf') ? 'application/pdf' : undefined
+  );
   const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
   ensureDir(saveDir);
   const savedPath = path.join(saveDir, filename);
@@ -539,167 +613,150 @@ function saveBufferDownload(
 
 export async function download(
   selector: string,
-  opts: import('../memory/RecipeMemory').DownloadConfig = {}
+  opts: DownloadConfig = {}
 ): Promise<{ saved_path: string; filename: string; source: string }> {
-  const previousSuppress = suppressAutoDownload;
-  suppressAutoDownload = true;
-  try {
-    await simulateCursor(selector, 'click');
+  const previousDownloadMode = downloadModeActive;
+  const previousPendingOpts = pendingDownloadOptions;
+  downloadModeActive = true;
+  pendingDownloadOptions = opts;
+  await simulateCursor(selector, 'click');
 
-    const p = await getPage();
-    const timeoutMs = opts.timeout_ms || 30_000;
-    const loc = p.locator(selector).first();
+  const p = await getPage();
+  const timeoutMs = opts.timeout_ms || 30_000;
+  const loc = p.locator(selector).first();
 
-    await loc.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+  await loc.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
 
-    await loc
-      .evaluate((node: HTMLElement) => {
-        if (node.hasAttribute('target')) {
-          node.removeAttribute('target');
-        }
-      })
-      .catch(() => {});
-
-    let resolvedUrl: string | null = null;
-    try {
-      const href = await loc.getAttribute('href');
-      if (href) {
-        resolvedUrl = new URL(href, p.url()).toString();
+  await loc
+    .evaluate((node: HTMLElement) => {
+      if (node.hasAttribute('target')) {
+        node.removeAttribute('target');
       }
+    })
+    .catch(() => {});
+
+  let resolvedUrl: string | null = null;
+  try {
+    const href = await loc.getAttribute('href');
+    if (href) {
+      resolvedUrl = new URL(href, p.url()).toString();
+    }
+  } catch {}
+
+  const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs });
+  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs });
+
+  await loc.click({ timeout: 5_000 }).catch(async () => {
+    await loc.click({ force: true, timeout: 2_000 }).catch(async () => {
+      await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
+    });
+  });
+
+  try {
+    const direct = await Promise.race([
+      directDownloadPromise.then((d) => ({ kind: 'download' as const, d })),
+      popupPromise.then((popup) => ({ kind: 'popup' as const, popup })),
+    ]);
+
+    if (direct.kind === 'download') {
+      return await trySaveDownload(direct.d, opts, null, 'direct');
+    }
+
+    const popupPage = direct.popup as Page;
+    const popupUrlBefore = popupPage.url() || null;
+
+    try {
+      await popupPage.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+      await popupPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
     } catch {}
 
-    const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs });
-    const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs });
-
-    await loc.click({ timeout: 5_000 }).catch(async () => {
-      await loc.click({ force: true, timeout: 2_000 }).catch(async () => {
-        await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
-      });
-    });
-
+    const popupUrl = popupPage.url() || popupUrlBefore || null;
+    let popupTitle = '';
     try {
-      const direct = await Promise.race([
-        directDownloadPromise.then((d) => ({ kind: 'download' as const, d })),
-        popupPromise.then((popup) => ({ kind: 'popup' as const, popup })),
-      ]);
+      popupTitle = await popupPage.title();
+    } catch {}
+    const lowerUrl = (popupUrl || '').toLowerCase();
+    const lowerTitle = popupTitle.toLowerCase();
 
-      if (direct.kind === 'download') {
-        return await trySaveDownload(direct.d, opts, null, 'direct');
+    const isLikelyPdf =
+      lowerUrl.includes('.pdf') ||
+      lowerTitle.includes('pdf') ||
+      lowerUrl.startsWith('blob:');
+
+    const popupNaturalDownload = await popupPage
+      .waitForEvent('download', { timeout: 2_500 })
+      .catch(() => null);
+
+    if (popupNaturalDownload) {
+      const result = await trySaveDownload(popupNaturalDownload, opts, popupUrl, 'popup_pdf');
+      if (opts.close_popup !== false) {
+        await popupPage.close().catch(() => {});
       }
+      return result;
+    }
 
-      const popupPage = direct.popup as Page;
-      const popupUrlBefore = popupPage.url() || null;
+    if (isLikelyPdf && popupUrl && !popupUrl.startsWith('blob:')) {
+      const autoCaptured = await autoCapturePdfFromPage(popupPage, opts);
+      if (autoCaptured) {
+        if (opts.close_popup !== false && !popupPage.isClosed()) {
+          await popupPage.close().catch(() => {});
+        }
+        return autoCaptured;
+      }
+    }
 
-      try {
-        await popupPage.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
-        await popupPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
-      } catch {}
+    const viewerDownloadPromise = popupPage.waitForEvent('download', { timeout: 10_000 }).catch(() => null);
 
-      const popupUrl = popupPage.url() || popupUrlBefore || null;
-      let popupTitle = '';
-      try {
-        popupTitle = await popupPage.title();
-      } catch {}
-      const lowerUrl = (popupUrl || '').toLowerCase();
-      const lowerTitle = popupTitle.toLowerCase();
+    const dlBtn = popupPage
+      .locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]')
+      .first();
 
-      const isLikelyPdf =
-        lowerUrl.includes('.pdf') ||
-        lowerTitle.includes('pdf') ||
-        lowerUrl.startsWith('blob:');
+    if (await dlBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await dlBtn.click({ force: true }).catch(() => {});
+      const viewerDownload = await viewerDownloadPromise;
 
-      const popupNaturalDownload = await popupPage
-        .waitForEvent('download', { timeout: 2_500 })
-        .catch(() => null);
-
-      if (popupNaturalDownload) {
-        const result = await trySaveDownload(popupNaturalDownload, opts, popupUrl, 'popup_pdf');
+      if (viewerDownload) {
+        const result = await trySaveDownload(viewerDownload, opts, popupUrl, 'popup_pdf');
         if (opts.close_popup !== false) {
           await popupPage.close().catch(() => {});
         }
         return result;
       }
-
-      if (isLikelyPdf && popupUrl && !popupUrl.startsWith('blob:')) {
-        const filename = buildDefaultFilename(undefined, opts.filename_template, popupUrl, 'popup_pdf');
-        const saveDir = path.resolve(process.cwd(), opts.save_dir || 'downloads');
-        ensureDir(saveDir);
-        const savedPath = path.join(saveDir, filename);
-
-        const bytes = await popupPage
-          .evaluate(async (url) => {
-            const res = await fetch(url, { credentials: 'include' });
-            if (!res.ok) throw new Error(`Failed to fetch popup PDF URL: ${res.status}`);
-            const buf = await res.arrayBuffer();
-            return Array.from(new Uint8Array(buf));
-          }, popupUrl)
-          .catch(() => null);
-
-        if (bytes && bytes.length > 0) {
-          fs.writeFileSync(savedPath, Buffer.from(bytes));
-          if (opts.close_popup !== false) {
-            await popupPage.close().catch(() => {});
-          }
-          return {
-            saved_path: path.relative(process.cwd(), savedPath),
-            filename,
-            source: 'popup_pdf',
-          };
-        }
-      }
-
-      const viewerDownloadPromise = popupPage.waitForEvent('download', { timeout: 10_000 }).catch(() => null);
-
-      const dlBtn = popupPage
-        .locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]')
-        .first();
-
-      if (await dlBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await dlBtn.click({ force: true }).catch(() => {});
-        const viewerDownload = await viewerDownloadPromise;
-
-        if (viewerDownload) {
-          const result = await trySaveDownload(viewerDownload, opts, popupUrl, 'popup_pdf');
-          if (opts.close_popup !== false) {
-            await popupPage.close().catch(() => {});
-          }
-          return result;
-        }
-      }
-
-      if (opts.close_popup !== false) {
-        await popupPage.close().catch(() => {});
-      }
-      throw new Error('Popup opened, but no downloadable file could be captured automatically.');
-    } catch (err: any) {
-      if (resolvedUrl) {
-        try {
-          const response = await p.context().request.get(resolvedUrl, {
-            timeout: timeoutMs,
-            failOnStatusCode: false,
-          });
-
-          const status = response.status();
-          const headers = response.headers();
-          const contentType = (headers['content-type'] || '').toLowerCase();
-          const bytes = Buffer.from(await response.body());
-
-          if (
-            status >= 200 && status < 300 &&
-            bytes.length > 0 &&
-            (contentType.includes('application/pdf') || resolvedUrl.toLowerCase().includes('.pdf'))
-          ) {
-            return saveBufferDownload(bytes, opts, resolvedUrl, 'direct_fetch_pdf');
-          }
-        } catch (fetchErr) {
-          log.warn({ err: (fetchErr as Error).message, url: resolvedUrl }, 'Fallback direct download failed');
-        }
-      }
-
-      throw new Error(`Download failed: ${err.message}`);
     }
+
+    if (opts.close_popup !== false) {
+      await popupPage.close().catch(() => {});
+    }
+    throw new Error('Popup opened, but no downloadable file could be captured automatically.');
+  } catch (err: any) {
+    if (resolvedUrl) {
+      try {
+        const response = await p.context().request.get(resolvedUrl, {
+          timeout: timeoutMs,
+          failOnStatusCode: false,
+        });
+
+        const status = response.status();
+        const headers = response.headers();
+        const contentType = (headers['content-type'] || '').toLowerCase();
+        const bytes = Buffer.from(await response.body());
+
+        if (
+          status >= 200 && status < 300 &&
+          bytes.length > 0 &&
+          (contentType.includes('application/pdf') || resolvedUrl.toLowerCase().includes('.pdf'))
+        ) {
+          return saveBufferDownload(bytes, opts, resolvedUrl, 'direct_fetch_pdf');
+        }
+      } catch (fetchErr) {
+        log.warn({ err: (fetchErr as Error).message, url: resolvedUrl }, 'Fallback direct download failed');
+      }
+    }
+
+    throw new Error(`Download failed: ${err.message}`);
   } finally {
-    suppressAutoDownload = previousSuppress;
+    downloadModeActive = previousDownloadMode;
+    pendingDownloadOptions = previousPendingOpts;
   }
 }
 
@@ -711,7 +768,7 @@ export async function closeBrowser(): Promise<void> {
     context = null;
     page = null;
     contextListenersAttached = false;
-    suppressAutoDownload = false;
+    downloadModeActive = false;
     log.info('Browser closed');
   }
 }
