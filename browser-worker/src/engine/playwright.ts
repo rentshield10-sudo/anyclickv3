@@ -252,15 +252,26 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
 
-export async function navigate(url: string): Promise<void> {
-  const { page: p } = await launchOrReuse();
-  log.info({ url }, 'Navigating');
+export async function navigate(url: string, opts: { newTab?: boolean } = {}): Promise<void> {
+  const { context: ctx } = await launchOrReuse();
+  let targetPage = await getPage();
+
+  if (opts.newTab) {
+    try {
+      await targetPage.close().catch(() => {});
+    } catch {}
+
+    targetPage = await ctx.newPage();
+    page = targetPage;
+    attachPageListeners(targetPage);
+  }
+
+  log.info({ url, newTab: opts.newTab }, 'Navigating');
   await retry(async () => {
-    // Just navigate the existing page instead of making a new one
-    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await p.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
-    await p.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
-    await p.waitForTimeout(1200);
+    await targetPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await targetPage.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
+    await targetPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+    await targetPage.waitForTimeout(1200);
   }, {
     label: 'navigate',
   });
@@ -607,15 +618,18 @@ async function trySaveDownload(
   try { downloadUrl = download.url(); } catch {}
   let contentType = '';
   try {
-    const response = await download.response();
-    const headers = response?.headers() || {};
-    contentType = headers['content-type'] || headers['Content-Type'] || '';
-    if (!hasExtension(suggested)) {
-      const dispositionName = parseContentDispositionFilename(
-        headers['content-disposition'] || headers['Content-Disposition']
-      );
-      if (dispositionName) {
-        suggested = dispositionName;
+    const downloadAny = download as any;
+    if (typeof downloadAny.response === 'function') {
+      const response = await downloadAny.response();
+      const headers = response?.headers() || {};
+      contentType = headers['content-type'] || headers['Content-Type'] || '';
+      if (!hasExtension(suggested)) {
+        const dispositionName = parseContentDispositionFilename(
+          headers['content-disposition'] || headers['Content-Disposition']
+        );
+        if (dispositionName) {
+          suggested = dispositionName;
+        }
       }
     }
   } catch {}

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../utils/logger';
 import type { LocatorCandidate } from '../locator/types';
+import { FlowStore } from '../persistence/FlowStore';
 
 const log = createLogger('recipe-memory');
 
@@ -15,33 +16,38 @@ const log = createLogger('recipe-memory');
 export class RecipeMemory {
   private dataDir: string;
   private cache: Map<string, RecipeEntry[]> = new Map();
+  private flowStore = FlowStore.getInstance();
 
   constructor(dataDir: string) {
     this.dataDir = path.join(dataDir, 'recipes');
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.loadAll();
+    this.reloadCacheFromDb();
   }
 
   // ─── Lookup ──────────────────────────────────────────────────────────────────
 
   lookup(site: string, intent: string, pageType?: string): RecipeEntry | null {
-    const recipes = this.cache.get(site);
-    if (!recipes) return null;
-
-    let best: RecipeEntry | null = null;
-    for (const recipe of recipes) {
-      if (recipe.intent !== intent) continue;
-      if (pageType && recipe.pageType === pageType) {
-        return recipe;
-      }
-      if (!best || recipe.confidence > best.confidence) {
-        best = recipe;
-      }
+    const recipes = this.flowStore.getAll(site);
+    if (!recipes.length) {
+      const legacy = this.cache.get(site) || [];
+      if (!legacy.length) return null;
+      return this.findBestMatch(legacy, intent, pageType);
     }
-    return best;
+    this.cache.set(site, recipes.slice());
+    const bestDb = this.findBestMatch(recipes, intent, pageType);
+    if (bestDb) return bestDb;
+
+    const legacy = this.cache.get(site) || [];
+    return this.findBestMatch(legacy, intent, pageType);
   }
 
   getById(recipeId: string): RecipeEntry | null {
+    const flow = this.flowStore.getById(recipeId);
+    if (flow) {
+      this.setCacheEntry(flow);
+      return flow;
+    }
     for (const recipes of this.cache.values()) {
       const recipe = recipes.find((r) => r.id === recipeId);
       if (recipe) return recipe;
@@ -52,115 +58,66 @@ export class RecipeMemory {
   // ─── Save / Update ───────────────────────────────────────────────────────────
 
   save(recipe: Omit<RecipeEntry, 'id'>): RecipeEntry {
-    const site = recipe.site;
-    if (!this.cache.has(site)) {
-      this.cache.set(site, []);
-    }
-
-    const recipes = this.cache.get(site)!;
-
-    const existingIdx = recipes.findIndex(
-      (r) => r.intent === recipe.intent && r.pageType === recipe.pageType
-    );
-
-    const entry: RecipeEntry = {
-      ...recipe,
-      id: existingIdx >= 0 ? recipes[existingIdx].id : generateId(),
-    };
-
-    if (existingIdx >= 0) {
-      recipes[existingIdx] = entry;
-      log.info({ site, intent: recipe.intent }, 'Updated existing recipe');
-    } else {
-      recipes.push(entry);
-      log.info({ site, intent: recipe.intent }, 'Saved new recipe');
-    }
-
-    this.persist(site);
+    const entry = this.flowStore.save(recipe);
+    this.setCacheEntry(entry);
+    this.persist(entry.site);
     return entry;
   }
 
   update(recipeId: string, recipe: Omit<RecipeEntry, 'id'>): RecipeEntry | null {
-    for (const [site, recipes] of this.cache) {
-      const existingIdx = recipes.findIndex((r) => r.id === recipeId);
-      if (existingIdx === -1) continue;
-
-      const existing = recipes[existingIdx];
-      const updated: RecipeEntry = {
-        ...recipe,
-        id: recipeId,
-      };
-
-      if (existing.site !== recipe.site) {
-        recipes.splice(existingIdx, 1);
-        this.persist(site);
-
-        if (!this.cache.has(recipe.site)) {
-          this.cache.set(recipe.site, []);
-        }
-        this.cache.get(recipe.site)!.push(updated);
-        this.persist(recipe.site);
-      } else {
-        recipes[existingIdx] = updated;
-        this.persist(site);
-      }
-
-      log.info({ recipeId, site: recipe.site, intent: recipe.intent }, 'Updated recipe by id');
-      return updated;
-    }
-
-    return null;
+    const updated = this.flowStore.update(recipeId, recipe);
+    if (!updated) return null;
+    this.setCacheEntry(updated);
+    this.persist(updated.site);
+    log.info({ recipeId, site: updated.site, intent: updated.intent }, 'Updated recipe by id');
+    return updated;
   }
 
   delete(recipeId: string): boolean {
-    for (const [site, recipes] of this.cache) {
-      const existingIdx = recipes.findIndex((r) => r.id === recipeId);
-      if (existingIdx === -1) continue;
-
-      recipes.splice(existingIdx, 1);
-      this.persist(site);
-      log.info({ recipeId, site }, 'Deleted recipe');
-      return true;
-    }
-
-    return false;
+    const flow = this.getById(recipeId);
+    if (!flow) return false;
+    const deleted = this.flowStore.delete(recipeId);
+    if (!deleted) return false;
+    this.removeFromCache(recipeId, flow.site);
+    this.persist(flow.site);
+    log.info({ recipeId, site: flow.site }, 'Deleted recipe');
+    return true;
   }
 
   // ─── Mark Success/Failure ─────────────────────────────────────────────────────
 
   markSuccess(recipeId: string): void {
-    for (const [site, recipes] of this.cache) {
-      const recipe = recipes.find((r) => r.id === recipeId);
-      if (recipe) {
-        recipe.successCount++;
-        recipe.lastSuccessAt = new Date().toISOString();
-        recipe.stale = false;
-        recipe.confidence = Math.min(0.99, recipe.confidence + 0.02);
-        this.persist(site);
-        return;
-      }
+    const flow = this.flowStore.getById(recipeId);
+    if (!flow) return;
+    this.flowStore.markSuccess(recipeId);
+    const updated = this.flowStore.getById(recipeId);
+    if (updated) {
+      this.setCacheEntry(updated);
+      this.persist(updated.site);
     }
   }
 
   markFailure(recipeId: string): void {
-    for (const [site, recipes] of this.cache) {
-      const recipe = recipes.find((r) => r.id === recipeId);
-      if (recipe) {
-        recipe.failureCount++;
-        recipe.confidence = Math.max(0.1, recipe.confidence - 0.1);
-        if (recipe.failureCount >= 3) {
-          recipe.stale = true;
-        }
-        this.persist(site);
-        return;
-      }
+    const flow = this.flowStore.getById(recipeId);
+    if (!flow) return;
+    this.flowStore.markFailure(recipeId);
+    const updated = this.flowStore.getById(recipeId);
+    if (updated) {
+      this.setCacheEntry(updated);
+      this.persist(updated.site);
     }
   }
 
   // ─── Get all recipes for a site ───────────────────────────────────────────────
 
   getAll(site?: string): RecipeEntry[] {
-    if (site) return this.cache.get(site) || [];
+    const flows = this.flowStore.getAll(site);
+    if (site) {
+      this.cache.set(site, flows.slice());
+      return flows;
+    }
+
+    this.reloadCacheFromDb();
     const all: RecipeEntry[] = [];
     for (const recipes of this.cache.values()) {
       all.push(...recipes);
@@ -174,12 +131,22 @@ export class RecipeMemory {
     try {
       if (!fs.existsSync(this.dataDir)) return;
       const files = fs.readdirSync(this.dataDir).filter((f) => f.endsWith('.json'));
+      const legacy: RecipeEntry[] = [];
       for (const file of files) {
-        const site = file.replace('.json', '');
-        const data = JSON.parse(fs.readFileSync(path.join(this.dataDir, file), 'utf-8'));
-        this.cache.set(site, data);
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(this.dataDir, file), 'utf-8'));
+          if (Array.isArray(data)) {
+            legacy.push(...data);
+          }
+        } catch (err) {
+          log.error({ err, file }, 'Failed to read legacy recipe file');
+        }
       }
-      log.info({ sites: this.cache.size }, 'Loaded recipe memory');
+
+      if (legacy.length > 0) {
+        this.flowStore.importLegacyRecipes(legacy);
+      }
+      log.info({ legacy: legacy.length }, 'Loaded legacy recipe memory');
     } catch (err) {
       log.error({ err }, 'Failed to load recipe memory');
     }
@@ -187,13 +154,69 @@ export class RecipeMemory {
 
   private persist(site: string): void {
     try {
-      const recipes = this.cache.get(site) || [];
+      const recipes = this.flowStore.getAll(site);
       fs.writeFileSync(
         path.join(this.dataDir, `${sanitizeFilename(site)}.json`),
         JSON.stringify(recipes, null, 2)
       );
+      this.cache.set(site, recipes.slice());
     } catch (err) {
       log.error({ err, site }, 'Failed to persist recipe memory');
+    }
+  }
+
+  private reloadCacheFromDb(): void {
+    this.cache.clear();
+    const all = this.flowStore.getAll();
+    for (const recipe of all) {
+      this.setCacheEntry(recipe);
+    }
+  }
+
+  private findBestMatch(recipes: RecipeEntry[], intent: string, pageType?: string): RecipeEntry | null {
+    let best: RecipeEntry | null = null;
+    for (const recipe of recipes) {
+      if (recipe.intent !== intent) continue;
+      if (pageType && recipe.pageType === pageType) {
+        return recipe;
+      }
+      if (!best || recipe.confidence > best.confidence) {
+        best = recipe;
+      }
+    }
+    return best;
+  }
+
+  private setCacheEntry(recipe: RecipeEntry): void {
+    if (!recipe.site) return;
+    if (!this.cache.has(recipe.site)) {
+      this.cache.set(recipe.site, []);
+    }
+    const arr = this.cache.get(recipe.site)!;
+    const idx = arr.findIndex((r) => r.id === recipe.id);
+    if (idx >= 0) {
+      arr[idx] = recipe;
+    } else {
+      arr.push(recipe);
+    }
+  }
+
+  private removeFromCache(recipeId: string, site?: string): void {
+    if (site && this.cache.has(site)) {
+      const arr = this.cache.get(site)!;
+      const idx = arr.findIndex((r) => r.id === recipeId);
+      if (idx >= 0) {
+        arr.splice(idx, 1);
+      }
+      return;
+    }
+
+    for (const [key, arr] of this.cache) {
+      const idx = arr.findIndex((r) => r.id === recipeId);
+      if (idx >= 0) {
+        arr.splice(idx, 1);
+        return;
+      }
     }
   }
 }

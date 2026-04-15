@@ -292,17 +292,17 @@ async function executeDirectPageAction(
 
 router.post('/load-url', async (req: Request, res: Response) => {
   try {
-    const { url, sessionId } = req.body as { url?: string; sessionId?: string };
+    const { url, sessionId, newTab } = req.body as { url?: string; sessionId?: string; newTab?: boolean };
 
     if (!url) {
       res.status(400).json({ ok: false, error: 'url is required' });
       return;
     }
 
-    log.info({ url, sessionId }, 'Navigating to URL');
+    log.info({ url, sessionId, newTab }, 'Navigating to URL');
     broadcastLog('info', `Navigating to ${url}`, { sessionId });
 
-    await pw.navigate(url);
+    await pw.navigate(url, { newTab: !!newTab });
     const page = await pw.getPage();
 
     res.json({
@@ -439,6 +439,190 @@ router.post('/test-click', async (req: Request, res: Response) => {
         method: 'test_click_fast',
         url: page.url(),
         title: await page.title(),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post('/get-select-options', async (req: Request, res: Response) => {
+  try {
+    const { selector, open } = req.body as { selector?: string; open?: boolean };
+    if (!selector) {
+      res.status(400).json({ ok: false, error: 'selector is required' });
+      return;
+    }
+
+    const page = await pw.getPage();
+    const locator = page.locator(selector).first();
+    const count = await locator.count();
+
+    if (count === 0) {
+      res.json({ ok: false, error: 'Element not found for selector' });
+      return;
+    }
+
+    if (open) {
+      await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => { });
+      await locator.click({ timeout: 1500 }).catch(() => { });
+      await page.waitForTimeout(150).catch(() => { });
+    }
+
+    const options = await locator.evaluate((node) => {
+      const results = [] as Array<{ value: string; label: string; selected: boolean; selector?: string }>;
+      if (!node) return results;
+
+      const toText = (input: any) => {
+        if (input === null || input === undefined) return '';
+        return String(input).trim();
+      };
+
+      const className = (node as HTMLElement).className ? (node as HTMLElement).className.toString().toLowerCase() : '';
+
+      const isOptionCandidate = (el: Element | null): el is HTMLElement => {
+        if (!el) return false;
+        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+        const cls = (el as HTMLElement).className ? (el as HTMLElement).className.toString().toLowerCase() : '';
+        const roleAttr = (el.getAttribute('role') || '').toLowerCase();
+        if (roleAttr === 'option') return true;
+        if (el.hasAttribute('data-value') || el.hasAttribute('data-option-value') || el.hasAttribute('data-select-value')) return true;
+        if (cls.includes('option') || cls.includes('dropdown-item') || cls.includes('choices__item')) return true;
+        if (tag === 'li' && (cls.includes('select') || cls.includes('choice'))) return true;
+        if (tag === 'button' && cls.includes('select')) return true;
+        return false;
+      };
+
+      const buildAutoSelector = (el: HTMLElement, fallbackValue: string, fallbackLabel: string): string | undefined => {
+        const role = el.getAttribute('role');
+        const textSnippet = toText(el.textContent || fallbackLabel || fallbackValue);
+        const escapedText = textSnippet.replace(/"/g, '\\"').slice(0, 60);
+
+        const dataValue = el.getAttribute('data-value') || el.getAttribute('data-option-value') || el.getAttribute('data-select-value');
+        if (dataValue) {
+          const escapedValue = toText(dataValue).replace(/"/g, '\\"');
+          return `[data-value="${escapedValue}"]${textSnippet ? `:has-text("${escapedText}")` : ''}`;
+        }
+
+        if (role === 'option') {
+          return `[role="option"]${textSnippet ? `:has-text("${escapedText}")` : ''}`;
+        }
+
+        const ariaLabelValue = el.getAttribute('aria-label') || el.getAttribute('aria-valuetext');
+        if (ariaLabelValue) {
+          const escapedAria = toText(ariaLabelValue).replace(/"/g, '\\"');
+          return `[aria-label="${escapedAria}"]${textSnippet ? `:has-text("${escapedText}")` : ''}`;
+        }
+
+        const classes = (el.className || '').toString().trim().split(/\s+/);
+        for (const cls of classes) {
+          if (!cls) continue;
+          return `.${cls}${textSnippet ? `:has-text("${escapedText}")` : ''}`;
+        }
+
+        const parent = el.closest('[role="option"]');
+        if (parent) {
+          return `[role="option"]${textSnippet ? `:has-text("${escapedText}")` : ''}`;
+        }
+
+        return textSnippet ? `:has-text("${escapedText}")` : undefined;
+      };
+
+      const pushOption = (el: Element | null) => {
+        if (!el) return;
+        const valueAttr = el.getAttribute('value');
+        const dataValue = el.getAttribute('data-value');
+        const dataOptionValue = el.getAttribute('data-option-value');
+        const dataSelectValue = el.getAttribute('data-select-value');
+        const ariaValue = el.getAttribute('aria-label');
+        const ariaValueText = el.getAttribute('aria-valuetext');
+        const textContent = el.textContent || '';
+        const value = toText(valueAttr || dataValue || dataOptionValue || dataSelectValue || ariaValue || ariaValueText || textContent);
+        const labelAttr =
+          el.getAttribute('label') ||
+          el.getAttribute('data-label') ||
+          ariaValue ||
+          ariaValueText ||
+          textContent;
+        const label = toText(labelAttr) || value || '(blank option)';
+        const ariaSelected = el.getAttribute('aria-selected');
+        const classList = (el as HTMLElement).classList || { contains: () => false };
+        const selectedProp = (el as any).selected;
+        const selected =
+          ariaSelected === 'true' ||
+          ariaSelected === '1' ||
+          Boolean(selectedProp) ||
+          classList.contains('selected') ||
+          classList.contains('active');
+
+        if (!value && !label) return;
+        const selector = buildAutoSelector(el as HTMLElement, value, label);
+        results.push({ value, label, selected, selector });
+      };
+
+      const tagName = node.tagName ? node.tagName.toLowerCase() : '';
+
+      if (tagName === 'select') {
+        const selectEl = node as HTMLSelectElement;
+        const nativeOptions = Array.from(selectEl.options || []);
+        if (nativeOptions.length > 0) {
+          nativeOptions.forEach((opt) => {
+            const value = toText(opt.value || opt.textContent || '');
+            const label = toText(opt.label || opt.textContent || '') || value || '(blank option)';
+            results.push({ value, label, selected: opt.selected });
+          });
+          return results;
+        }
+      }
+
+      const candidateNodes = new Set<Element>();
+
+      Array.from(node.querySelectorAll('option, [role="option"], [data-option-value], [data-select-value], [data-value]')).forEach((opt) => {
+        if (isOptionCandidate(opt)) candidateNodes.add(opt);
+      });
+
+      if (className.includes('nice-select')) {
+        Array.from((node as HTMLElement).querySelectorAll('.list .option')).forEach((opt) => {
+          if (isOptionCandidate(opt)) candidateNodes.add(opt);
+        });
+      }
+
+      if (candidateNodes.size === 0) {
+        Array.from(node.querySelectorAll('li, div, span, button')).forEach((opt) => {
+          if (isOptionCandidate(opt)) {
+            candidateNodes.add(opt);
+          }
+        });
+      }
+
+      candidateNodes.forEach((opt) => pushOption(opt));
+
+      return results;
+    });
+
+    if (open) {
+      await locator.evaluate((n: any) => {
+        if (n && n.classList && typeof n.classList.remove === 'function') {
+          n.classList.remove('open');
+        }
+      }).catch(() => { });
+      await page.keyboard.press('Escape').catch(() => { });
+    }
+
+    const unique: Array<{ value: string; label: string; selected: boolean; selector?: string }> = [];
+    const seen = new Set<string>();
+
+    for (const opt of options) {
+      const key = `${opt.value}:::${opt.label}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(opt);
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        options: unique,
       },
     });
   } catch (err: any) {

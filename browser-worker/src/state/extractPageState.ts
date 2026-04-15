@@ -18,6 +18,10 @@ export async function extractPageState(page: Page): Promise<PageState> {
 
   if (config.DEBUG_OVERLAY) {
     await page.evaluate(() => {
+      const state = (window as any).__anyclickBadgeUpdater;
+      if (state && typeof state.disposeAll === 'function') {
+        state.disposeAll();
+      }
       document.querySelectorAll('.anyclick-debug-badge').forEach((e) => e.remove());
     }).catch(() => { });
   }
@@ -229,6 +233,21 @@ async function extractElements(page: Page): Promise<Element[]> {
         if (tag === 'input') return (el.getAttribute('type') || 'input').toLowerCase();
         if (tag === 'textarea') return 'textarea';
         if (tag === 'select') return 'select';
+        const className = (el.className || '').toString().toLowerCase();
+        const ariaHasPopup = (el.getAttribute('aria-haspopup') || '').toLowerCase();
+        const customSelectPatterns = ['nice-select', 'custom-select', 'select2', 'dropdown-select', 'combo-select', 'choices__inner'];
+        const matchesCustomPattern = customSelectPatterns.some((pattern) => className.includes(pattern));
+        if (
+          tag !== 'select' &&
+          (
+            role === 'combobox' ||
+            role === 'listbox' ||
+            matchesCustomPattern ||
+            ariaHasPopup === 'listbox'
+          )
+        ) {
+          return 'select_custom';
+        }
         if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('contenteditable') === 'plaintext-only') {
           return 'contenteditable';
         }
@@ -336,8 +355,12 @@ async function extractElements(page: Page): Promise<Element[]> {
       }
 
       const scanRoot = getActiveModal() || document;
+      const isWithinScope = (el: HTMLElement) => {
+        if (scanRoot === document) return true;
+        return (scanRoot as HTMLElement).contains(el);
+      };
       const rawNodes = Array.from(scanRoot.querySelectorAll(selector)) as HTMLElement[];
-      
+
       // If we are scoped to a modal, ensure the modal's own close buttons/containers are included if they match
       if (scanRoot !== document && (scanRoot as HTMLElement).matches && (scanRoot as HTMLElement).matches(selector)) {
          rawNodes.push(scanRoot as HTMLElement);
@@ -347,6 +370,7 @@ async function extractElements(page: Page): Promise<Element[]> {
       const nodes: HTMLElement[] = [];
 
       for (const node of rawNodes) {
+        if (!isWithinScope(node)) continue;
         if (seen.has(node)) continue;
         seen.add(node);
         nodes.push(node);
@@ -354,12 +378,17 @@ async function extractElements(page: Page): Promise<Element[]> {
         // EXPANSION RULE 1: If it's a hidden/tiny input, the user sees its wrapper/label instead
         if (node.tagName === 'INPUT' && (node.getAttribute('type') === 'radio' || node.getAttribute('type') === 'checkbox')) {
             if (node.parentElement && !seen.has(node.parentElement)) {
-               seen.add(node.parentElement);
-               nodes.push(node.parentElement);
+               if (isWithinScope(node.parentElement)) {
+                seen.add(node.parentElement);
+                nodes.push(node.parentElement);
+               }
             }
             if (node.nextElementSibling && !seen.has(node.nextElementSibling as HTMLElement)) {
-               seen.add(node.nextElementSibling as HTMLElement);
-               nodes.push(node.nextElementSibling as HTMLElement);
+               const sibling = node.nextElementSibling as HTMLElement;
+               if (isWithinScope(sibling)) {
+                 seen.add(sibling);
+                 nodes.push(sibling);
+               }
             }
         }
 
@@ -367,13 +396,13 @@ async function extractElements(page: Page): Promise<Element[]> {
         if (node.tagName === 'TR' || (node.className && typeof node.className === 'string' && node.className.includes('row'))) {
             const firstChild = node.firstElementChild as HTMLElement;
             if (firstChild) {
-                if (!seen.has(firstChild)) {
+                if (!seen.has(firstChild) && isWithinScope(firstChild)) {
                     seen.add(firstChild);
                     nodes.push(firstChild);
                 }
                 const firstCellChildren = Array.from(firstChild.children) as HTMLElement[];
                 for (const fcc of firstCellChildren) {
-                    if (!seen.has(fcc)) {
+                    if (!seen.has(fcc) && isWithinScope(fcc)) {
                         seen.add(fcc);
                         nodes.push(fcc);
                     }
@@ -382,7 +411,9 @@ async function extractElements(page: Page): Promise<Element[]> {
         }
       }
 
-      return nodes.map((el, index) => {
+      return nodes
+        .filter((el) => isWithinScope(el))
+        .map((el, index) => {
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
         const visible = isActuallyVisible(el, rect, style);
@@ -541,14 +572,11 @@ async function extractElements(page: Page): Promise<Element[]> {
     }, INTERACTIVE_SELECTOR).catch(() => []);
 
     elementProps.sort((a, b) => b.score - a.score);
-    const topElements = elementProps.slice(0, 250);
+    const topElements = elementProps;
 
     const badgePayloads: Array<{
       id: number;
-      top: number;
-      left: number;
-      width: number;
-      height: number;
+      selector: string;
     }> = [];
 
     for (const prop of topElements) {
@@ -572,10 +600,7 @@ async function extractElements(page: Page): Promise<Element[]> {
       if (config.DEBUG_OVERLAY) {
         badgePayloads.push({
           id: elementCounter,
-          top: prop.rect.top,
-          left: prop.rect.left,
-          width: prop.rect.width,
-          height: prop.rect.height,
+          selector: prop.idStr,
         });
       }
     }
@@ -583,15 +608,202 @@ async function extractElements(page: Page): Promise<Element[]> {
     if (config.DEBUG_OVERLAY && badgePayloads.length > 0) {
       await page.evaluate((payloads: Array<{
         id: number;
-        top: number;
-        left: number;
-        width: number;
-        height: number;
+        selector: string;
+        colorIndex: number;
       }>) => {
         const colors = ['#ef4444', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-        for (const p of payloads) {
-          const color = colors[p.id % colors.length];
+        const candidateMatchesSelectorText = (node: HTMLElement, selector: string) => {
+          const HAS_TEXT_PATTERN = /:has-text\("((?:\\"|[^"])*)"\)/;
+          const match = selector.match(HAS_TEXT_PATTERN);
+          if (!match) return true;
+          const textRaw = match[1].replace(/\\"/g, '"').trim();
+          const normalizedNeedle = textRaw.toLowerCase();
+          return (node.textContent || '').toLowerCase().includes(normalizedNeedle);
+        };
+
+        const resolveTarget = (selector: string | null | undefined): HTMLElement | null => {
+          if (!selector) return null;
+
+          const HAS_TEXT_PATTERN = /:has-text\("((?:\\"|[^"])*)"\)/;
+          const match = selector.match(HAS_TEXT_PATTERN);
+          if (match) {
+            const textRaw = match[1].replace(/\\"/g, '"').trim();
+            const baseSelector = selector.replace(HAS_TEXT_PATTERN, '');
+            let candidates: HTMLElement[] = [];
+            try {
+              candidates = Array.from(document.querySelectorAll<HTMLElement>(baseSelector));
+            } catch (err) {
+              console.debug('[anyclick-overlay] invalid base selector', baseSelector, err);
+              return null;
+            }
+
+            const normalizedNeedle = textRaw.toLowerCase();
+            return (
+              candidates.find((node) => (node.textContent || '').toLowerCase().includes(normalizedNeedle)) ||
+              null
+            );
+          }
+
+          try {
+            const directMatch = document.querySelector<HTMLElement>(selector);
+            if (directMatch) return directMatch;
+          } catch (err) {
+            console.debug('[anyclick-overlay] invalid selector', selector, err);
+          }
+
+          const optionSelectors = [
+            '.nice-select.open .list .option',
+            '.select2-container--open .select2-results__option',
+            '[role="listbox"] [role="option"]',
+            '.dropdown-menu [role="option"]',
+            '.dropdown-menu .dropdown-item',
+            '.choices__list .choices__item',
+            '.ant-select-dropdown [role="option"]',
+            '.mantine-Select-dropdown [role="option"]',
+          ];
+
+          for (const pattern of optionSelectors) {
+            try {
+              const candidate = Array.from(document.querySelectorAll<HTMLElement>(pattern)).find((node) => candidateMatchesSelectorText(node, selector));
+              if (candidate) return candidate;
+            } catch (err) {
+              console.debug('[anyclick-overlay] candidate selector failed', pattern, err);
+            }
+          }
+
+          return null;
+        };
+
+        type BadgeEntry = {
+          id: number;
+          selector: string;
+          color: string;
+          target: HTMLElement | null;
+          box: HTMLDivElement;
+          resizeObserver: ResizeObserver | null;
+          scrollHandlers: Array<{ node: EventTarget; handler: () => void }>;
+        };
+
+        const getState = () => {
+          let state = (window as any).__anyclickBadgeUpdater as undefined | {
+            entries: BadgeEntry[];
+            raf: number | null;
+            schedule: () => void;
+            update: () => void;
+            disposeEntry: (entry: BadgeEntry) => void;
+            disposeAll: () => void;
+          };
+
+          if (!state) {
+            const newState: typeof state = {
+              entries: [],
+              raf: null,
+              schedule: () => {
+                if (newState.raf == null) {
+                  newState.raf = requestAnimationFrame(newState.update);
+                }
+              },
+              update: () => {
+                newState.raf = null;
+                const liveEntries: BadgeEntry[] = [];
+                for (const entry of newState.entries) {
+                  let target = entry.target;
+                  if (!target || !target.isConnected) {
+                    const nextTarget = resolveTarget(entry.selector);
+                    if (!nextTarget) {
+                      newState.disposeEntry(entry);
+                      continue;
+                    }
+
+                    entry.resizeObserver?.disconnect();
+                    entry.scrollHandlers.forEach(({ node, handler }) => {
+                      node.removeEventListener?.('scroll', handler, true);
+                    });
+                    entry.scrollHandlers = [];
+
+                    entry.resizeObserver = new ResizeObserver(() => newState.schedule());
+                    entry.resizeObserver.observe(nextTarget);
+                    entry.target = nextTarget;
+                    makeScrollObservers(entry, nextTarget);
+                    target = nextTarget;
+                  }
+
+                  if (!target) {
+                    newState.disposeEntry(entry);
+                    continue;
+                  }
+
+                  const rect = target.getBoundingClientRect();
+                  if (rect.width <= 0 || rect.height <= 0) {
+                    entry.box.style.display = 'none';
+                    continue;
+                  }
+
+                  entry.box.style.display = '';
+                  entry.box.style.top = `${rect.top + window.scrollY}px`;
+                  entry.box.style.left = `${rect.left + window.scrollX}px`;
+                  entry.box.style.width = `${rect.width}px`;
+                  entry.box.style.height = `${rect.height}px`;
+
+                  liveEntries.push(entry);
+                }
+
+                newState.entries = liveEntries;
+
+                if (newState.entries.length > 0) {
+                  newState.raf = requestAnimationFrame(newState.update);
+                }
+              },
+              disposeEntry: (entry) => {
+                entry.resizeObserver?.disconnect();
+                entry.scrollHandlers.forEach(({ node, handler }) => {
+                  node.removeEventListener?.('scroll', handler, true);
+                });
+                entry.scrollHandlers = [];
+                if (entry.box.parentElement) entry.box.remove();
+              },
+              disposeAll: () => {
+                newState.entries.slice().forEach((entry) => newState.disposeEntry(entry));
+                newState.entries = [];
+                if (newState.raf != null) {
+                  cancelAnimationFrame(newState.raf);
+                  newState.raf = null;
+                }
+              }
+            };
+
+            window.addEventListener('scroll', newState.schedule, true);
+            window.addEventListener('resize', newState.schedule, true);
+            window.addEventListener('orientationchange', newState.schedule, true);
+            (window as any).__anyclickBadgeUpdater = newState;
+            state = newState;
+          }
+
+          return state;
+        };
+
+        const state = getState();
+
+        const makeScrollObservers = (entry: BadgeEntry, target: HTMLElement) => {
+          const schedule = state.schedule;
+          const handler = () => schedule();
+
+          let node: HTMLElement | null = target;
+          while (node) {
+            const isScrollable = node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth;
+            if (isScrollable) {
+              node.addEventListener('scroll', handler, true);
+              entry.scrollHandlers.push({ node, handler });
+            }
+            node = node.parentElement;
+          }
+        };
+
+        const createBox = (payload: typeof payloads[number]) => {
+          const color = colors[payload.colorIndex % colors.length];
+          const target = resolveTarget(payload.selector);
+          if (!target) return;
 
           const box = document.createElement('div');
           box.className = 'anyclick-debug-badge';
@@ -599,14 +811,13 @@ async function extractElements(page: Page): Promise<Element[]> {
           box.style.border = `2px solid ${color}`;
           box.style.zIndex = '2147483647';
           box.style.pointerEvents = 'none';
-          box.style.top = (p.top + window.scrollY) + 'px';
-          box.style.left = (p.left + window.scrollX) + 'px';
-          box.style.width = p.width + 'px';
-          box.style.height = p.height + 'px';
           box.style.boxSizing = 'border-box';
+          box.style.top = '0px';
+          box.style.left = '0px';
+          box.dataset.anyclickId = String(payload.id);
 
           const label = document.createElement('div');
-          label.textContent = p.id.toString();
+          label.textContent = payload.id.toString();
           label.style.position = 'absolute';
           label.style.top = '-10px';
           label.style.right = '-10px';
@@ -618,11 +829,52 @@ async function extractElements(page: Page): Promise<Element[]> {
           label.style.borderRadius = '4px';
           label.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
           label.style.fontFamily = 'system-ui, sans-serif';
-
           box.appendChild(label);
+
           document.body.appendChild(box);
+
+          const entry: BadgeEntry = {
+            id: payload.id,
+            selector: payload.selector,
+            color,
+            target,
+            box,
+            resizeObserver: null,
+            scrollHandlers: [],
+          };
+
+          const rect = target.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+            box.style.display = 'none';
+          } else {
+            box.style.display = '';
+            box.style.top = `${rect.top + window.scrollY}px`;
+            box.style.left = `${rect.left + window.scrollX}px`;
+            box.style.width = `${rect.width}px`;
+            box.style.height = `${rect.height}px`;
+          }
+
+          entry.resizeObserver = new ResizeObserver(() => state.schedule());
+          entry.resizeObserver.observe(target);
+
+          makeScrollObservers(entry, target);
+
+          state.entries.push(entry);
+          state.schedule();
+        };
+
+        for (const payload of payloads) {
+          // Avoid duplicate entries for the same element id
+          state.entries = state.entries.filter((existing) => {
+            if (existing.id === payload.id) {
+              state.disposeEntry(existing);
+              return false;
+            }
+            return true;
+          });
+          createBox(payload);
         }
-      }, badgePayloads).catch((err) => console.log('Badge injection failed:', err));
+      }, badgePayloads.map((p) => ({ id: p.id, selector: p.selector, colorIndex: p.id }))).catch((err) => console.log('Badge injection failed:', err));
     }
   } catch (err) {
     log.warn({ err }, 'Element extraction encountered an error');

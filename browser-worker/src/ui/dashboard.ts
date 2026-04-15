@@ -281,9 +281,11 @@ export function buildDashboardHtml(): string {
     }
     .element-card-actions {
       display: flex;
-      justify-content: flex-end;
-      gap: 8px;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
       margin-top: 2px;
+      flex-wrap: wrap;
     }
     .element-card-actions button {
       padding: 6px 10px;
@@ -293,6 +295,23 @@ export function buildDashboardHtml(): string {
       cursor: pointer;
       font-size: 12px;
       transition: background 0.2s;
+    }
+    .element-card-actions-buttons {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .element-select-inline {
+      flex: 1 1 200px;
+      min-width: 180px;
+      margin-top: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+      gap: 4px;
+    }
+    .element-select-inline .element-select-options-title {
+      font-size: 11px;
     }
     .element-card-actions .test-element-btn {
       background: #6366f1;
@@ -305,6 +324,38 @@ export function buildDashboardHtml(): string {
     }
     .element-card-actions .add-to-flow-btn:hover {
       background: #16a34a;
+    }
+
+    .element-select-options {
+      margin-top: 8px;
+      padding: 8px;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      background: #0f172a;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .element-select-options-title {
+      font-size: 12px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .element-select-helper {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    .element-select-dropdown {
+      padding: 6px 10px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #f8fafc;
+      border-radius: 4px;
+      font-size: 13px;
     }
 
     .flow-step-card {
@@ -384,6 +435,17 @@ export function buildDashboardHtml(): string {
 
     .flow-step-value-row.visible {
       display: grid;
+    }
+
+    .flow-step-value-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .flow-step-select-helper {
+      font-size: 11px;
+      color: #94a3b8;
     }
 
     .bottom-panel-area {
@@ -702,6 +764,23 @@ export function buildDashboardHtml(): string {
     let statusHideTimer = null;
     let elementsFilterValue = '';
     let editingRecipeId = null;
+    const elementOptionState = new Map();
+
+    function buildOptionSelectorFromState(state, value, label) {
+      if (!state || !Array.isArray(state.options)) return undefined;
+      const match = state.options.find((opt) => opt.value === value) || state.options.find((opt) => opt.label === label);
+      if (!match) return undefined;
+
+      if (match.selector && typeof match.selector === 'string') {
+        return match.selector;
+      }
+
+      const textSnippet = match.label || match.value;
+      if (!textSnippet) return undefined;
+
+      const escapedText = textSnippet.replace(/"/g, '\\"').slice(0, 60);
+      return '[role="option"]:has-text("' + escapedText + '")';
+    }
 
     const elementsList = document.getElementById('elements-list');
     const flowStepsList = document.getElementById('flow-steps-list');
@@ -838,6 +917,9 @@ export function buildDashboardHtml(): string {
       if (tag === 'SELECT') {
         return 'selects';
       }
+      if (typeAttr.includes('select') || role === 'combobox' || role === 'listbox') {
+        return 'selects';
+      }
       if ((tag === 'INPUT' && ['checkbox', 'radio'].includes(typeAttr)) || role === 'checkbox' || role === 'radio') {
         return 'toggles';
       }
@@ -956,21 +1038,26 @@ export function buildDashboardHtml(): string {
       if (recipe && recipe.startUrl) {
         urlInput.value = recipe.startUrl;
       }
-      return locators.map((locator, index) => ({
-        action: locator.action || 'click',
-        target: {
-          label: locator.label || undefined,
-          text: locator.text || undefined,
-          placeholder: locator.placeholder || undefined,
-          role: locator.role || undefined,
-          tag: locator.tag || undefined,
-          cssSelector: locator.selector || undefined,
-          type: locator.type || undefined,
-          elementId: typeof locator.elementId === 'number' ? locator.elementId : undefined
-        },
-        value: locator.value || '',
-        recipeLocatorIndex: index
-      }));
+      return locators.map((locator, index) => {
+        const step = {
+          action: locator.action || 'click',
+          target: {
+            label: locator.label || undefined,
+            text: locator.text || undefined,
+            placeholder: locator.placeholder || undefined,
+            role: locator.role || undefined,
+            tag: locator.tag || undefined,
+            cssSelector: locator.selector || undefined,
+            type: locator.type || undefined,
+            elementId: typeof locator.elementId === 'number' ? locator.elementId : undefined
+          },
+          value: locator.value || '',
+          recipeLocatorIndex: index
+        };
+
+        initializeSelectMetadata(step);
+        return step;
+      });
     }
 
     function loadRecipeIntoBuilder(recipe) {
@@ -1158,6 +1245,7 @@ export function buildDashboardHtml(): string {
     async function refreshAvailableElements() {
       if (!currentSessionId) {
         allAvailableElements = [];
+        elementOptionState.clear();
         appendCenteredMessage(elementsList, 'Start a session to load elements.', '#64748b');
         return;
       }
@@ -1271,19 +1359,32 @@ export function buildDashboardHtml(): string {
           const actionsRow = document.createElement('div');
           actionsRow.className = 'element-card-actions';
 
+          let selectOptionsContainer = null;
+          if (getElementKind(el) === 'selects') {
+            selectOptionsContainer = document.createElement('div');
+            selectOptionsContainer.className = 'element-select-options element-select-inline';
+            actionsRow.appendChild(selectOptionsContainer);
+            renderElementSelectOptions(el, index, selectOptionsContainer);
+          }
+
+          const actionsButtons = document.createElement('div');
+          actionsButtons.className = 'element-card-actions-buttons';
+
           const testButton = document.createElement('button');
           testButton.className = 'test-element-btn';
           testButton.type = 'button';
           testButton.textContent = 'Test';
           testButton.dataset.elementIndex = String(index);
-          actionsRow.appendChild(testButton);
+          actionsButtons.appendChild(testButton);
 
           const addButton = document.createElement('button');
           addButton.className = 'add-to-flow-btn';
           addButton.type = 'button';
           addButton.textContent = 'Add to Flow';
           addButton.dataset.elementIndex = String(index);
-          actionsRow.appendChild(addButton);
+          actionsButtons.appendChild(addButton);
+
+          actionsRow.appendChild(actionsButtons);
 
           card.appendChild(actionsRow);
           groupDiv.appendChild(card);
@@ -1299,7 +1400,470 @@ export function buildDashboardHtml(): string {
       renderGroup('Other Elements', groupedElements.other);
     }
 
+    function getElementOptionKey(elementData, index) {
+      if (elementData && typeof elementData.selector === 'string' && elementData.selector) {
+        return 'selector:' + elementData.selector;
+      }
+      const elementId = getElementId(elementData);
+      if (elementId !== null) {
+        return 'elementId:' + elementId;
+      }
+      const tag = elementData && elementData.tag ? elementData.tag : 'unknown';
+      const text = elementData && (elementData.text || elementData.label || '');
+      return 'index:' + index + ':' + tag + ':' + text;
+    }
+
+    function isCustomSelectElement(elementData) {
+      const tag = elementData && typeof elementData.tag === 'string' ? elementData.tag.toLowerCase() : '';
+      const type = elementData && typeof elementData.type === 'string' ? elementData.type.toLowerCase() : '';
+      return type.includes('select') && tag !== 'select';
+    }
+
+    function isCustomSelectTarget(target) {
+      if (!target) return false;
+      const tag = target.tag ? String(target.tag).toLowerCase() : '';
+      const type = target.type ? String(target.type).toLowerCase() : '';
+      if (type.includes('select') && tag !== 'select') return true;
+      if (!type && tag && tag !== 'select') {
+        const selector = target.cssSelector || '';
+        if (selector.includes('nice-select') || selector.includes('select2')) return true;
+      }
+      return false;
+    }
+
+    function ensureElementOptionState(key) {
+      if (!elementOptionState.has(key)) {
+        elementOptionState.set(key, {
+          options: undefined,
+          loading: false,
+          error: null,
+          selectedValue: ''
+        });
+      }
+      return elementOptionState.get(key);
+    }
+
+    function createElementSelectHelper(text, isError = false) {
+      const helper = document.createElement('div');
+      helper.className = 'element-select-helper';
+      if (isError) {
+        helper.style.color = '#fca5a5';
+      }
+      helper.textContent = text;
+      return helper;
+    }
+
+    function renderElementSelectOptions(elementData, originalIndex, container) {
+      const key = getElementOptionKey(elementData, originalIndex);
+      const state = ensureElementOptionState(key);
+      const isCustomSelect = isCustomSelectElement(elementData);
+      const tagName = elementData && typeof elementData.tag === 'string' ? elementData.tag.toLowerCase() : '';
+      const isNativeSelect = tagName === 'select';
+      const shouldAutoLoad = isNativeSelect && !isCustomSelect;
+
+      clearChildren(container);
+
+      const title = document.createElement('div');
+      title.className = 'element-select-options-title';
+      title.textContent = 'Select Options';
+      container.appendChild(title);
+
+      const appendLoadButton = (disabled = false, label = disabled ? 'Loading...' : 'Load Options') => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'test-element-btn element-load-options-btn';
+        button.dataset.elementKey = key;
+        button.dataset.elementIndex = String(originalIndex);
+        button.textContent = label;
+        if (disabled) {
+          button.disabled = true;
+        }
+        container.appendChild(button);
+        return button;
+      };
+
+      if (!currentSessionId) {
+        container.appendChild(createElementSelectHelper('Start a session to detect options.'));
+        return;
+      }
+
+      if (!elementData || !elementData.selector) {
+        container.appendChild(createElementSelectHelper('Selector missing. Configure value after adding.'));
+        return;
+      }
+
+      if (state.loading) {
+        appendLoadButton(true);
+        container.appendChild(createElementSelectHelper('Loading current options...'));
+        return;
+      }
+
+      if (state.error) {
+        if (isCustomSelect) {
+          appendLoadButton(false, 'Retry Loading');
+        }
+        container.appendChild(createElementSelectHelper(state.error || 'Could not detect options.', true));
+        if (!isCustomSelect) {
+          container.appendChild(createElementSelectHelper('Value can be set after adding.', true));
+        }
+        return;
+      }
+
+      if (state.options === undefined) {
+        if (shouldAutoLoad) {
+          state.error = null;
+          state.loading = true;
+          container.appendChild(createElementSelectHelper('Detecting options...'));
+          fetchSelectOptionsForElement(key, elementData, { open: false });
+        } else {
+          appendLoadButton(false);
+          container.appendChild(createElementSelectHelper('Load options from the current page before adding.'));
+        }
+        return;
+      }
+
+      if (!Array.isArray(state.options) || state.options.length === 0) {
+        if (isCustomSelect) {
+          appendLoadButton(false, 'Reload Options');
+        }
+        container.appendChild(createElementSelectHelper('No options detected. Value can be set after adding.', true));
+        return;
+      }
+
+      if (!state.selectedValue) {
+        const preselected = state.options.find((opt) => opt.selected && opt.value);
+        const defaultOption = preselected || state.options[0];
+        if (defaultOption && defaultOption.value) {
+          state.selectedValue = defaultOption.value;
+        }
+      }
+
+      const selectEl = document.createElement('select');
+      selectEl.className = 'element-select-dropdown';
+      selectEl.dataset.elementKey = key;
+      selectEl.dataset.elementIndex = String(originalIndex);
+
+      state.options.forEach((opt) => {
+        const optionEl = document.createElement('option');
+        optionEl.value = opt.value || '';
+        optionEl.textContent = opt.label || opt.value || '(blank option)';
+        selectEl.appendChild(optionEl);
+      });
+
+      if (state.selectedValue) {
+        selectEl.value = state.selectedValue;
+      }
+
+      container.appendChild(selectEl);
+      container.appendChild(createElementSelectHelper('Chosen option will prefill the flow step.'));
+    }
+
+    async function fetchSelectOptionsForElement(key, elementData, { open = false } = {}) {
+      const state = ensureElementOptionState(key);
+
+      try {
+        const response = await apiCall('POST', '/browser/get-select-options', {
+          selector: elementData.selector,
+          open,
+        });
+
+        if (response && response.ok && response.data && Array.isArray(response.data.options)) {
+          const normalized = response.data.options
+            .map((opt) => {
+              const rawValue =
+                typeof opt.value === 'string'
+                  ? opt.value
+                  : opt.value != null
+                    ? String(opt.value)
+                    : '';
+              const value = rawValue.trim();
+              const rawLabel = typeof opt.label === 'string' ? opt.label : '';
+              const label = (rawLabel || value).trim() || '(blank option)';
+              const selected = Boolean(opt.selected);
+
+              return {
+                value,
+                label,
+                selected,
+                selector: typeof opt.selector === 'string' ? opt.selector : undefined,
+              };
+            })
+            .filter((opt) => opt.label || opt.value !== '');
+
+          state.options = normalized;
+          state.error = null;
+
+          if (!state.selectedValue && normalized.length > 0) {
+            const preselected = normalized.find((opt) => opt.selected && opt.value);
+            const defaultOption = preselected || normalized[0];
+            if (defaultOption && defaultOption.value) {
+              state.selectedValue = defaultOption.value;
+            }
+          }
+        } else {
+          state.options = [];
+          state.error = response && !response.ok && response.error ? response.error : 'Failed to detect options';
+        }
+      } catch (error) {
+        console.error('Failed to fetch element select options:', error);
+        state.options = [];
+        state.error = error instanceof Error ? error.message : 'Failed to detect options';
+      } finally {
+        state.loading = false;
+        renderAvailableElements();
+      }
+    }
+
+    function loadSelectOptionsForElement(elementIndex) {
+      const elementData = allAvailableElements[elementIndex];
+      if (!elementData) {
+        return;
+      }
+
+      if (!currentSessionId) {
+        updateStatus('Start a session before loading dropdown options.', true);
+        return;
+      }
+
+      const key = getElementOptionKey(elementData, elementIndex);
+      const state = ensureElementOptionState(key);
+
+      if (!elementData.selector) {
+        state.options = [];
+        state.error = 'Missing selector for dropdown';
+        renderAvailableElements();
+        return;
+      }
+
+      if (state.loading) {
+        return;
+      }
+
+      state.error = null;
+      state.loading = true;
+      state.options = undefined;
+      renderAvailableElements();
+
+      const open = isCustomSelectElement(elementData);
+      fetchSelectOptionsForElement(key, elementData, { open }).catch((error) => {
+        console.error('Option load failed:', error);
+      });
+    }
+
+    function initializeSelectMetadata(step) {
+      if (!step) return;
+      step._selectOptions = undefined;
+      step._selectOptionsLoading = false;
+      step._selectOptionsError = null;
+    }
+
+    function createSelectHelperElement(text, isError = false) {
+      const helper = document.createElement('div');
+      helper.className = 'flow-step-select-helper';
+      if (isError) {
+        helper.style.color = '#fca5a5';
+      }
+      helper.textContent = text;
+      return helper;
+    }
+
+    function renderSelectValueControls(container, valueInput, step, index) {
+      if (!step) return;
+
+      valueInput.style.display = '';
+      Array.from(container.querySelectorAll('.flow-step-select-helper, .flow-step-select-dropdown')).forEach((node) => node.remove());
+
+      if (!(Array.isArray(step._selectOptions) && step._selectOptions.length > 0)) {
+        let helperText = '';
+        let isError = false;
+
+        if (step._selectOptionsLoading) {
+          helperText = 'Detecting options...';
+        } else if (step._selectOptionsError) {
+          helperText = 'Could not detect options. Enter value manually.';
+          isError = true;
+        } else if (Array.isArray(step._selectOptions) && step._selectOptions.length === 0) {
+          helperText = 'Options not detected. Enter value manually.';
+        } else if (!currentSessionId) {
+          helperText = 'Start a session to detect options.';
+        } else if (!step.target || !step.target.cssSelector) {
+          helperText = 'Selector missing. Enter option value manually.';
+        } else {
+          helperText = 'Detecting options...';
+        }
+
+        if (helperText) {
+          container.appendChild(createSelectHelperElement(helperText, isError));
+        }
+
+        if (
+          !step._selectOptionsLoading &&
+          step._selectOptions === undefined &&
+          currentSessionId &&
+          step.target &&
+          step.target.cssSelector
+        ) {
+          step._selectOptionsLoading = true;
+          fetchSelectOptionsForStep(index);
+        }
+
+        return;
+      }
+
+      valueInput.style.display = 'none';
+
+      const selectEl = document.createElement('select');
+      selectEl.className = 'flow-step-value-input flow-step-select-dropdown';
+      selectEl.dataset.stepIndex = String(index);
+
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Choose option...';
+      placeholder.disabled = true;
+
+      const trimmedValue = typeof step.value === 'string' ? step.value.trim() : '';
+      let hasSelectedMatch = false;
+
+      step._selectOptions.forEach((opt) => {
+        const optionEl = document.createElement('option');
+        optionEl.value = opt.value || '';
+        optionEl.textContent = opt.label || opt.value || '(blank option)';
+        if (trimmedValue && opt.value === trimmedValue) {
+          optionEl.selected = true;
+          hasSelectedMatch = true;
+        } else if (!trimmedValue && opt.selected && opt.value) {
+          optionEl.selected = true;
+          hasSelectedMatch = true;
+        }
+        selectEl.appendChild(optionEl);
+      });
+
+      if (!hasSelectedMatch) {
+        if (trimmedValue) {
+          const currentOption = document.createElement('option');
+          currentOption.value = trimmedValue;
+          currentOption.textContent = 'Current value: ' + trimmedValue;
+          currentOption.selected = true;
+          selectEl.appendChild(currentOption);
+        } else {
+          placeholder.selected = true;
+        }
+      }
+
+      selectEl.insertBefore(placeholder, selectEl.firstChild);
+      container.appendChild(selectEl);
+    }
+
+    async function fetchSelectOptionsForStep(index) {
+      const step = flowSteps[index];
+      if (!step) return;
+
+      if (!currentSessionId || !step.target || !step.target.cssSelector) {
+        step._selectOptionsLoading = false;
+        renderFlowSteps();
+        return;
+      }
+
+      const targetTag = step.target.tag ? step.target.tag.toLowerCase() : '';
+      const targetType = step.target.type ? step.target.type.toLowerCase() : '';
+      const open = targetType.includes('select') && targetTag !== 'select';
+
+      try {
+        const response = await apiCall('POST', '/browser/get-select-options', {
+          selector: step.target.cssSelector,
+          open,
+        });
+
+        if (response && response.ok && response.data && Array.isArray(response.data.options)) {
+          const normalized = response.data.options
+            .map((opt) => {
+              const rawValue =
+                typeof opt.value === 'string'
+                  ? opt.value
+                  : opt.value != null
+                    ? String(opt.value)
+                    : '';
+              const value = rawValue.trim();
+              const rawLabel = typeof opt.label === 'string' ? opt.label : '';
+              const label = (rawLabel || value).trim() || '(blank option)';
+              const selected = Boolean(opt.selected);
+
+              return {
+                value,
+                label,
+                selected,
+                selector: typeof opt.selector === 'string' ? opt.selector : undefined,
+              };
+            })
+            .filter((opt) => opt.label || opt.value !== '');
+
+          step._selectOptions = normalized;
+          step._selectOptionsError = null;
+
+          if ((!step.value || !step.value.trim()) && normalized.length > 0) {
+            const preselected = normalized.find((opt) => opt.selected && opt.value);
+            const defaultOption = preselected || normalized[0];
+            if (defaultOption && defaultOption.value) {
+              step.value = defaultOption.value;
+            }
+          }
+        } else {
+          step._selectOptions = [];
+          step._selectOptionsError =
+            response && !response.ok && response.error ? response.error : null;
+        }
+      } catch (error) {
+        console.error('Failed to fetch select options:', error);
+        step._selectOptions = [];
+        step._selectOptionsError =
+          error instanceof Error ? error.message : 'Failed to detect options';
+      } finally {
+        step._selectOptionsLoading = false;
+        renderFlowSteps();
+      }
+    }
+
     function renderFlowSteps() {
+      // Convert any lingering custom-select steps into click sequences
+      let convertedCustomSelect = false;
+      for (let i = 0; i < flowSteps.length; i++) {
+        const step = flowSteps[i];
+        if (step && step.action === 'select' && isCustomSelectTarget(step.target)) {
+          const dropdownStep = {
+            action: 'click',
+            target: step.target,
+            value: ''
+          };
+
+          const newSteps = [dropdownStep];
+
+          const optionLabel = step.value ? String(step.value).trim() : '';
+          if (optionLabel) {
+            const optionSelector = step._selectOptions
+              ? buildOptionSelectorFromState({ options: step._selectOptions }, step.value, optionLabel)
+              : undefined;
+            newSteps.push({
+              action: 'click',
+              target: {
+                text: optionLabel,
+                role: 'option',
+                description: 'Select option ' + optionLabel,
+                cssSelector: optionSelector
+              },
+              value: ''
+            });
+          }
+
+          flowSteps.splice(i, 1, ...newSteps);
+          convertedCustomSelect = true;
+          // Adjust index to skip newly inserted steps
+          i += newSteps.length - 1;
+        }
+      }
+      if (convertedCustomSelect) {
+        updateStatus('Converted custom dropdown SELECT into click steps.');
+      }
+
       clearChildren(flowStepsList);
 
       if (flowSteps.length === 0) {
@@ -1315,12 +1879,12 @@ export function buildDashboardHtml(): string {
         const actionsDiv = document.createElement('div');
         actionsDiv.className = 'flow-step-actions';
 
-        const runButton = document.createElement('button');
-        runButton.className = 'run-btn';
-        runButton.type = 'button';
-        runButton.dataset.stepIndex = String(index);
-        runButton.textContent = 'Run';
-        actionsDiv.appendChild(runButton);
+        const testButton = document.createElement('button');
+        testButton.className = 'run-btn';
+        testButton.type = 'button';
+        testButton.dataset.stepIndex = String(index);
+        testButton.textContent = 'Test';
+        actionsDiv.appendChild(testButton);
 
         const upButton = document.createElement('button');
         upButton.className = 'move-up-btn';
@@ -1389,6 +1953,10 @@ export function buildDashboardHtml(): string {
         else valueLabel.textContent = 'Text / Value';
         valueRow.appendChild(valueLabel);
 
+        const valueContainer = document.createElement('div');
+        valueContainer.className = 'flow-step-value-container';
+        valueRow.appendChild(valueContainer);
+
         const valueInput = document.createElement('input');
         valueInput.type = 'text';
         valueInput.className = 'flow-step-value-input';
@@ -1398,7 +1966,11 @@ export function buildDashboardHtml(): string {
         else valueInput.placeholder = 'Enter text or phone number';
         valueInput.value = step.value || '';
         valueInput.dataset.stepIndex = String(index);
-        valueRow.appendChild(valueInput);
+        valueContainer.appendChild(valueInput);
+
+        if (step.action === 'select') {
+          renderSelectValueControls(valueContainer, valueInput, step, index);
+        }
 
         card.appendChild(valueRow);
         flowStepsList.appendChild(card);
@@ -1419,14 +1991,74 @@ export function buildDashboardHtml(): string {
         return;
       }
 
-      flowSteps.push({
+      const targetBase = {
+        ...buildTargetFromElement(elementData),
+        elementId: getElementId(elementData)
+      };
+
+      const isCustomSelect = isCustomSelectElement(elementData);
+      if (isCustomSelect) {
+        const dropdownStep = {
+          action: 'click',
+          target: targetBase,
+          value: ''
+        };
+        flowSteps.push(dropdownStep);
+
+        const key = getElementOptionKey(elementData, elementIndex);
+        const state = ensureElementOptionState(key);
+        const chosenValueRaw = state && typeof state.selectedValue === 'string' ? state.selectedValue.trim() : '';
+
+        if (chosenValueRaw) {
+          const selectedOption = state && Array.isArray(state.options)
+            ? state.options.find((opt) => opt.value === chosenValueRaw) || state.options.find((opt) => opt.label === chosenValueRaw)
+            : null;
+
+          const optionLabel = selectedOption ? selectedOption.label || selectedOption.value : chosenValueRaw;
+
+          const optionStep = {
+            action: 'click',
+            target: {
+              text: optionLabel,
+              role: 'option',
+              description: 'Select option ' + optionLabel,
+              cssSelector: buildOptionSelectorFromState(state, chosenValueRaw, optionLabel)
+            },
+            value: ''
+          };
+          flowSteps.push(optionStep);
+        } else {
+          updateStatus('Custom dropdown added. Load options to auto-add the option click.', true);
+        }
+
+        renderFlowSteps();
+        updateStatus('Custom dropdown click steps added.');
+        return;
+      }
+
+      const newStep = {
         action: inferDefaultAction(elementData),
-        target: {
-          ...buildTargetFromElement(elementData),
-          elementId: getElementId(elementData)
-        },
+        target: targetBase,
         value: ''
-      });
+      };
+
+      if (getElementKind(elementData) === 'selects') {
+        const key = getElementOptionKey(elementData, elementIndex);
+        const state = ensureElementOptionState(key);
+        let chosenValue = state && typeof state.selectedValue === 'string' ? state.selectedValue : '';
+
+        if ((!chosenValue || !chosenValue.trim()) && state && Array.isArray(state.options) && state.options.length > 0) {
+          chosenValue = state.options[0].value || '';
+        }
+
+        if (chosenValue && chosenValue.trim()) {
+          newStep.action = 'select';
+          newStep.value = chosenValue.trim();
+        }
+      }
+
+      initializeSelectMetadata(newStep);
+      flowSteps.push(newStep);
 
       renderFlowSteps();
       updateStatus('Element added to flow builder.');
@@ -1568,12 +2200,11 @@ export function buildDashboardHtml(): string {
         return false;
       }
 
-      setBusy(true, 'Running flow step...');
+      setBusy(true, 'Testing step...');
 
       try {
         let response = null;
         let executionMode = 'fallback';
-
         if (step.target && step.target.cssSelector) {
           response = await executeDirectStep(step);
           executionMode = 'direct';
@@ -1691,9 +2322,24 @@ export function buildDashboardHtml(): string {
 
     function updateFlowStepAction(index, action) {
       if (!flowSteps[index]) return;
-      flowSteps[index].action = action;
+      const step = flowSteps[index];
+      if (action === 'select' && isCustomSelectTarget(step.target)) {
+        updateStatus('Custom dropdowns must use click actions. Converted back to CLICK.', true);
+        flowSteps[index].action = 'click';
+        renderFlowSteps();
+        return;
+      }
+
+      step.action = action;
       if (action === 'click') {
         flowSteps[index].value = '';
+      }
+      if (action === 'select') {
+        initializeSelectMetadata(flowSteps[index]);
+      } else {
+        delete flowSteps[index]._selectOptions;
+        delete flowSteps[index]._selectOptionsLoading;
+        delete flowSteps[index]._selectOptionsError;
       }
       renderFlowSteps();
     }
@@ -1720,6 +2366,7 @@ export function buildDashboardHtml(): string {
       if (!currentSessionId) {
         updateSessionInfo();
         allAvailableElements = [];
+        elementOptionState.clear();
         appendCenteredMessage(elementsList, 'Start a session to load elements.', '#64748b');
         setScreenshotPlaceholder('Screenshot will appear here after session start or action.');
         return;
@@ -2178,6 +2825,7 @@ export function buildDashboardHtml(): string {
         flowSteps = [];
         editingRecipeId = null;
         allAvailableElements = [];
+        elementOptionState.clear();
         renderFlowSteps();
         updateSessionInfo('Loading...', 'Loading...');
         appendCenteredMessage(elementsList, 'Loading page elements...', '#64748b');
@@ -2267,7 +2915,10 @@ export function buildDashboardHtml(): string {
       const elementIndex = typeof rawIndex === 'string' ? parseInt(rawIndex, 10) : -1;
       if (!Number.isInteger(elementIndex) || elementIndex < 0) return;
 
-      if (target.classList.contains('add-to-flow-btn')) {
+      if (target.classList.contains('element-load-options-btn')) {
+        loadSelectOptionsForElement(elementIndex);
+        return;
+      } else if (target.classList.contains('add-to-flow-btn')) {
         addElementToFlowByIndex(elementIndex);
       } else if (target.classList.contains('test-element-btn')) {
         testElementByIndex(elementIndex);
@@ -2333,7 +2984,25 @@ export function buildDashboardHtml(): string {
         if (Number.isInteger(index) && index >= 0) {
           updateFlowStepAction(index, target.value);
         }
+      } else if (target instanceof HTMLSelectElement && target.classList.contains('flow-step-select-dropdown')) {
+        const rawIndex = target.dataset.stepIndex;
+        const index = typeof rawIndex === 'string' ? parseInt(rawIndex, 10) : -1;
+        if (Number.isInteger(index) && index >= 0) {
+          updateFlowStepValue(index, target.value);
+        }
       }
+    });
+
+    elementsList.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) return;
+      if (!target.classList.contains('element-select-dropdown')) return;
+
+      const key = target.dataset.elementKey;
+      if (!key) return;
+
+      const state = ensureElementOptionState(key);
+      state.selectedValue = target.value || '';
     });
 
     document.addEventListener('DOMContentLoaded', async () => {
