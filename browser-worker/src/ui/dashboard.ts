@@ -409,6 +409,83 @@ export function buildDashboardHtml(): string {
       margin-right: 110px;
     }
 
+    .flow-step-category-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #0ea5e9;
+      color: #0f172a;
+      font-size: 11px;
+      font-weight: 700;
+      margin-right: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .flow-step-toolbox {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 10px 0 14px;
+    }
+    .flow-step-toolbox .toolbox-group {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 8px 10px;
+      min-width: 160px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .flow-step-toolbox .toolbox-group-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #e2e8f0;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .flow-step-toolbox .toolbox-group button {
+      padding: 6px 8px;
+      border: 1px solid #475569;
+      border-radius: 4px;
+      background: #1e293b;
+      color: #cbd5e1;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+      text-align: left;
+    }
+    .flow-step-toolbox .toolbox-group button:hover {
+      background: #334155;
+      border-color: #38bdf8;
+      color: #f8fafc;
+    }
+
+    .flow-step-config-block {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 10px;
+      margin-right: 110px;
+      align-items: center;
+    }
+    .flow-step-config-block textarea {
+      min-height: 60px;
+      resize: vertical;
+    }
+    .flow-step-config-block select,
+    .flow-step-config-block textarea,
+    .flow-step-config-block input {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #f8fafc;
+      padding: 6px 8px;
+      font-size: 12px;
+      width: 100%;
+    }
+
     .flow-step-controls label {
       color: #94a3b8;
       font-size: 12px;
@@ -663,6 +740,49 @@ export function buildDashboardHtml(): string {
       text-align: center;
       padding: 10px;
     }
+
+    .step-output-panel {
+      border: 1px solid #334155;
+      border-radius: 6px;
+      background: #0f172a;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 150px;
+    }
+    .step-output-row {
+      display: flex;
+      gap: 12px;
+      align-items: baseline;
+    }
+    .step-output-status {
+      font-weight: 600;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .step-output-status.pass { color: #34d399; }
+    .step-output-status.fail { color: #f87171; }
+    .step-output-status.skipped { color: #facc15; }
+    .step-output-row-label {
+      color: #94a3b8;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      min-width: 140px;
+    }
+    .step-output-row-value {
+      color: #e2e8f0;
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .step-output-screenshot {
+      max-width: 100%;
+      border: 1px solid #1e293b;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
@@ -725,6 +845,7 @@ export function buildDashboardHtml(): string {
           <button id="save-flow-btn" class="save-flow-btn" type="button" disabled>Save This Flow</button>
         </div>
       </div>
+      <div class="flow-step-toolbox" id="flow-step-toolbox"></div>
       <div id="flow-steps-list"></div>
     </div>
   </div>
@@ -748,6 +869,11 @@ export function buildDashboardHtml(): string {
     <div class="bottom-section">
       <h3 class="section-title">Live Activity Logs</h3>
       <div class="logs-panel" id="logs-panel"></div>
+    </div>
+
+    <div class="bottom-section">
+      <h3 class="section-title">Step Output / Extracted Data</h3>
+      <div class="step-output-panel" id="step-output-panel"></div>
     </div>
 
     <div class="bottom-section">
@@ -804,6 +930,8 @@ export function buildDashboardHtml(): string {
     const saveFlowButton = document.getElementById('save-flow-btn');
     const busyIndicator = document.getElementById('busy-indicator');
     const busyText = document.getElementById('busy-text');
+    const flowStepToolbox = document.getElementById('flow-step-toolbox');
+    const stepOutputPanel = document.getElementById('step-output-panel');
 
     function clearChildren(node) {
       while (node.firstChild) {
@@ -822,6 +950,194 @@ export function buildDashboardHtml(): string {
       container.appendChild(div);
     }
 
+    function getStepMeta(action) {
+      return action ? STEP_ACTION_META[action] || null : null;
+    }
+
+    function isStepExecutable(step) {
+      const meta = getStepMeta(step && step.action);
+      return !!(meta && meta.isExecutable);
+    }
+
+    function ensureStepDefaults(step) {
+      const meta = getStepMeta(step.action) || STEP_ACTION_META[step.action] || null;
+      if (!step.category) {
+        step.category = (meta && meta.category) || 'action';
+      }
+      if (!step.target || typeof step.target !== 'object') {
+        step.target = {};
+      }
+      if (!step.config || typeof step.config !== 'object') {
+        step.config = {};
+      }
+      if (step.action === 'logic_if_else') {
+        step.config.source = step.config.source || 'query';
+        step.config.condition = step.config.condition || 'contains_text';
+        step.config.matchText = typeof step.config.matchText === 'string' ? step.config.matchText : '';
+        step.config.thenNotes = typeof step.config.thenNotes === 'string' ? step.config.thenNotes : '';
+        step.config.elseNotes = typeof step.config.elseNotes === 'string' ? step.config.elseNotes : '';
+      }
+    }
+
+    function renderStepOutputPanel() {
+      if (!stepOutputPanel) return;
+      clearChildren(stepOutputPanel);
+
+      const statusDiv = document.createElement('div');
+      const statusClass = stepOutputState.pass === true ? 'pass' : stepOutputState.pass === false ? 'fail' : 'skipped';
+      statusDiv.className = 'step-output-status ' + (stepOutputState.status === 'idle' ? '' : statusClass);
+      const label = stepOutputState.actionLabel ? `${stepOutputState.actionLabel} ${stepOutputState.stepIndex !== null ? '(Step ' + (stepOutputState.stepIndex + 1) + ')' : ''}` : 'No step selected';
+      statusDiv.textContent = stepOutputState.status === 'idle' ? 'No step run yet.' : `${label} · ${stepOutputState.message}`;
+      stepOutputPanel.appendChild(statusDiv);
+
+      const timestampRow = document.createElement('div');
+      timestampRow.className = 'step-output-row';
+      const tsLabel = document.createElement('div');
+      tsLabel.className = 'step-output-row-label';
+      tsLabel.textContent = 'Last Updated';
+      const tsValue = document.createElement('div');
+      tsValue.className = 'step-output-row-value';
+      tsValue.textContent = stepOutputState.timestamp || '—';
+      timestampRow.appendChild(tsLabel);
+      timestampRow.appendChild(tsValue);
+      stepOutputPanel.appendChild(timestampRow);
+
+      const queryRow = document.createElement('div');
+      queryRow.className = 'step-output-row';
+      const queryLabel = document.createElement('div');
+      queryLabel.className = 'step-output-row-label';
+      queryLabel.textContent = 'Query Summary';
+      const queryValue = document.createElement('div');
+      queryValue.className = 'step-output-row-value';
+      queryValue.textContent = stepOutputState.querySummary || '—';
+      queryRow.appendChild(queryLabel);
+      queryRow.appendChild(queryValue);
+      stepOutputPanel.appendChild(queryRow);
+
+      const scrapeRow = document.createElement('div');
+      scrapeRow.className = 'step-output-row';
+      const scrapeLabel = document.createElement('div');
+      scrapeLabel.className = 'step-output-row-label';
+      scrapeLabel.textContent = 'Scrape Summary';
+      const scrapeValue = document.createElement('div');
+      scrapeValue.className = 'step-output-row-value';
+      scrapeValue.textContent = stepOutputState.scrapeSummary || '—';
+      scrapeRow.appendChild(scrapeLabel);
+      scrapeRow.appendChild(scrapeValue);
+      stepOutputPanel.appendChild(scrapeRow);
+
+      const screenshotRow = document.createElement('div');
+      screenshotRow.className = 'step-output-row';
+      const screenshotLabel = document.createElement('div');
+      screenshotLabel.className = 'step-output-row-label';
+      screenshotLabel.textContent = 'Screenshot';
+      const screenshotValue = document.createElement('div');
+      screenshotValue.className = 'step-output-row-value';
+      if (stepOutputState.screenshotPath) {
+        const img = document.createElement('img');
+        img.src = stepOutputState.screenshotPath;
+        img.alt = 'Step screenshot preview';
+        img.className = 'step-output-screenshot';
+        screenshotValue.appendChild(img);
+      } else {
+        screenshotValue.textContent = 'No screenshot captured yet.';
+      }
+      screenshotRow.appendChild(screenshotLabel);
+      screenshotRow.appendChild(screenshotValue);
+      stepOutputPanel.appendChild(screenshotRow);
+    }
+
+    function updateStepOutputState({ stepIndex, step, status, pass, message, querySummary, scrapeSummary }) {
+      const meta = step ? getStepMeta(step.action) : null;
+      stepOutputState.stepIndex = typeof stepIndex === 'number' ? stepIndex : null;
+      stepOutputState.actionLabel = meta ? meta.label : (step && step.action) || '';
+      stepOutputState.status = status || 'idle';
+      stepOutputState.pass = typeof pass === 'boolean' ? pass : null;
+      if (typeof message === 'string') {
+        stepOutputState.message = message;
+      }
+      if (typeof querySummary === 'string') {
+        stepOutputState.querySummary = querySummary;
+      }
+      if (typeof scrapeSummary === 'string') {
+        stepOutputState.scrapeSummary = scrapeSummary;
+      }
+      stepOutputState.timestamp = new Date().toLocaleTimeString();
+      renderStepOutputPanel();
+    }
+
+    function updateStepOutputScreenshot(path) {
+      stepOutputState.screenshotPath = path || '';
+      renderStepOutputPanel();
+    }
+
+    function scheduleStepEditRefresh() {
+      if (editRefreshTimer) {
+        clearTimeout(editRefreshTimer);
+      }
+      editRefreshTimer = setTimeout(async () => {
+        editRefreshTimer = null;
+        try {
+          await refreshAllState();
+        } catch (error) {
+          console.error('Failed to refresh state after step edit:', error);
+        }
+      }, 600);
+    }
+
+    function createStepFromDefinition(category, action) {
+      const meta = getStepMeta(action);
+      const base = {
+        category: category || (meta ? meta.category : 'action'),
+        action,
+        target: meta && meta.needsTarget ? { cssSelector: '', label: '', text: '', placeholder: '', role: '', tag: '', type: '', elementId: null } : {},
+        value: meta && meta.needsValue ? '' : '',
+        config: {}
+      };
+      if (action === 'logic_if_else') {
+        base.config = {
+          source: 'query',
+          condition: 'contains_text',
+          matchText: '',
+          thenNotes: '',
+          elseNotes: ''
+        };
+      }
+      return base;
+    }
+
+    function addManualStep(category, action) {
+      const meta = getStepMeta(action);
+      if (!meta) return;
+      flowSteps.push(createStepFromDefinition(category, action));
+      renderFlowSteps();
+      updateStatus(meta.label + ' step added to flow. Configure details below.');
+    }
+
+    function renderFlowStepToolbox() {
+      if (!flowStepToolbox) return;
+      clearChildren(flowStepToolbox);
+      ['verify', 'extract', 'evidence', 'logic'].forEach((categoryKey) => {
+        const group = STEP_ACTION_GROUPS[categoryKey];
+        if (!group) return;
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'toolbox-group';
+        const title = document.createElement('div');
+        title.className = 'toolbox-group-title';
+        title.textContent = group.label;
+        groupDiv.appendChild(title);
+        group.actions.forEach((actionDef) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.stepCategory = categoryKey;
+          button.dataset.stepAction = actionDef.value;
+          button.textContent = actionDef.label;
+          groupDiv.appendChild(button);
+        });
+        flowStepToolbox.appendChild(groupDiv);
+      });
+    }
+
     function setScreenshotPlaceholder(message, color) {
       clearChildren(screenshotPanel);
       const span = document.createElement('span');
@@ -831,6 +1147,7 @@ export function buildDashboardHtml(): string {
       }
       span.textContent = message;
       screenshotPanel.appendChild(span);
+      updateStepOutputScreenshot('');
     }
 
     function setBusy(isBusy, message = 'Loading...') {
@@ -844,16 +1161,30 @@ export function buildDashboardHtml(): string {
 
       startSessionButton.disabled = isBusy;
       refreshStateButton.disabled = isBusy;
-      runFlowButton.disabled = isBusy || flowSteps.length === 0;
-      saveFlowButton.disabled = isBusy || flowSteps.length === 0;
+      if (isBusy) {
+        runFlowButton.disabled = true;
+        saveFlowButton.disabled = true;
+      } else {
+        updateFlowButtons();
+      }
       urlInput.disabled = isBusy;
       elementsFilterInput.disabled = isBusy;
     }
 
     function updateFlowButtons() {
       const disabled = flowSteps.length === 0;
-      runFlowButton.disabled = disabled;
-      saveFlowButton.disabled = disabled;
+      const executableCount = flowSteps.filter((step) => isStepExecutable(step)).length;
+      const hasUnsupported = flowSteps.some((step) => !isStepExecutable(step));
+      runFlowButton.disabled = disabled || hasUnsupported;
+      saveFlowButton.disabled = disabled || executableCount === 0;
+      runFlowButton.title = hasUnsupported
+        ? 'Run disabled: remove or skip Verify/Extract/Evidence/Logic steps or automate them via recipes.'
+        : '';
+      saveFlowButton.title = hasUnsupported
+        ? 'Save includes only executable action steps. Remove Verify/Extract/Evidence/Logic steps before saving.'
+        : (executableCount === 0 && !disabled
+            ? 'Add at least one executable action step before saving.'
+            : '');
     }
 
     async function apiCall(method, path, body) {
@@ -959,8 +1290,10 @@ export function buildDashboardHtml(): string {
       }
 
       const first = flowSteps[0];
-      const firstLabel = getElementDisplayLabel(first.target);
-      return 'Flow: ' + first.action + ' ' + firstLabel;
+      const firstMeta = getStepMeta(first.action);
+      const firstLabel = first.category === 'action' ? getElementDisplayLabel(first.target) : '';
+      const actionLabel = firstMeta ? firstMeta.label : first.action;
+      return 'Flow: ' + actionLabel + (firstLabel ? ' ' + firstLabel : '');
     }
 
     function escapeJsString(value) {
@@ -1088,7 +1421,9 @@ export function buildDashboardHtml(): string {
       const title = stateResponse && stateResponse.state ? stateResponse.state.title || '' : '';
       const startUrl = urlInput.value.trim() || currentUrl || '';
 
-      const locators = flowSteps.map((step, index) => ({
+      const executableSteps = flowSteps.filter((step) => isStepExecutable(step));
+
+      const locators = executableSteps.map((step, index) => ({
         kind: 'css',
         selector: step.target.cssSelector || ('flow-step-' + (index + 1)),
         text: step.target.text || undefined,
@@ -1128,10 +1463,10 @@ export function buildDashboardHtml(): string {
           headings: Array.isArray(fingerprint.headings) ? fingerprint.headings : [],
           pathPattern: fingerprint.pathPattern || ''
         },
-        startUrl,
-        generatedScript: generateFlowPlaywrightScript(flowSteps, startUrl),
-        locators,
-        fallbackTexts: flowSteps
+         startUrl,
+         generatedScript: generateFlowPlaywrightScript(executableSteps, startUrl),
+         locators,
+         fallbackTexts: executableSteps
           .map((step) => getElementDisplayLabel(step.target))
           .filter(Boolean),
         confidence: 0.8,
@@ -1216,9 +1551,11 @@ export function buildDashboardHtml(): string {
         img.src = currentScreenshotObjectUrl;
         img.alt = 'Current browser screenshot';
         screenshotPanel.appendChild(img);
+        updateStepOutputScreenshot(currentScreenshotObjectUrl);
       } catch (error) {
         console.error('Failed to load screenshot:', error);
         setScreenshotPlaceholder('Failed to load screenshot.', '#ef4444');
+        updateStepOutputScreenshot('');
       }
     }
 
@@ -1873,6 +2210,14 @@ export function buildDashboardHtml(): string {
       }
 
       flowSteps.forEach((step, index) => {
+        ensureStepDefaults(step);
+        const meta = getStepMeta(step.action) || {
+          label: String(step.action || '').toUpperCase(),
+          categoryLabel: (step.category || 'action').toUpperCase(),
+          needsValue: false,
+          isExecutable: false
+        };
+
         const card = document.createElement('div');
         card.className = 'flow-step-card';
 
@@ -1911,15 +2256,30 @@ export function buildDashboardHtml(): string {
 
         card.appendChild(actionsDiv);
 
-        const labelDiv = document.createElement('div');
-        labelDiv.className = 'flow-step-label';
-        const idPrefix = typeof step.target.elementId === 'number' ? ('#' + step.target.elementId + ' ') : '';
-        labelDiv.textContent =
-          (index + 1) + '. ' +
-          String(step.action).toUpperCase() + ': ' +
-          idPrefix +
-          getElementDisplayLabel(step.target);
-        card.appendChild(labelDiv);
+        const headerRow = document.createElement('div');
+        headerRow.className = 'flow-step-label';
+
+        const categoryBadge = document.createElement('span');
+        categoryBadge.className = 'flow-step-category-badge';
+        categoryBadge.textContent = meta.categoryLabel || (step.category || 'Action');
+        headerRow.appendChild(categoryBadge);
+
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = (index + 1) + '. ' + meta.label;
+        headerRow.appendChild(labelSpan);
+
+        if ((step.category || 'action') === 'action' && step.target) {
+          const targetLabel = document.createElement('span');
+          targetLabel.style.display = 'block';
+          targetLabel.style.fontWeight = '400';
+          targetLabel.style.fontSize = '12px';
+          targetLabel.style.color = '#cbd5e1';
+          const idPrefix = typeof step.target.elementId === 'number' ? ('#' + step.target.elementId + ' ') : '';
+          targetLabel.textContent = idPrefix + getElementDisplayLabel(step.target);
+          headerRow.appendChild(targetLabel);
+        }
+
+        card.appendChild(headerRow);
 
         const actionRow = document.createElement('div');
         actionRow.className = 'flow-step-controls';
@@ -1928,30 +2288,34 @@ export function buildDashboardHtml(): string {
         actionLabel.textContent = 'Action';
         actionRow.appendChild(actionLabel);
 
-        const actionSelect = document.createElement('select');
-        actionSelect.className = 'flow-step-action-select';
-        actionSelect.dataset.stepIndex = String(index);
+        const group = STEP_ACTION_GROUPS[step.category] || STEP_ACTION_GROUPS.action;
+        if ((step.category === 'action') || (group && group.actions && group.actions.length > 1)) {
+          const actionSelect = document.createElement('select');
+          actionSelect.className = 'flow-step-action-select';
+          actionSelect.dataset.stepIndex = String(index);
+          (group && group.actions ? group.actions : STEP_ACTION_GROUPS.action.actions).forEach((definition) => {
+            const option = document.createElement('option');
+            option.value = definition.value;
+            option.textContent = definition.label;
+            option.selected = step.action === definition.value;
+            actionSelect.appendChild(option);
+          });
+          actionRow.appendChild(actionSelect);
+        } else {
+          const staticAction = document.createElement('span');
+          staticAction.textContent = meta.label;
+          actionRow.appendChild(staticAction);
+        }
 
-        ['click', 'type', 'select', 'wait', 'download'].forEach((actionName) => {
-          const option = document.createElement('option');
-          option.value = actionName;
-          option.textContent = actionName.toUpperCase();
-          option.selected = step.action === actionName;
-          actionSelect.appendChild(option);
-        });
-
-        actionRow.appendChild(actionSelect);
         card.appendChild(actionRow);
 
-        const valueRow = document.createElement('div');
-        valueRow.className = 'flow-step-value-row' + ((step.action === 'type' || step.action === 'select' || step.action === 'wait' || step.action === 'download') ? ' visible' : '');
+        if (meta.needsValue) {
+          const valueRow = document.createElement('div');
+          valueRow.className = 'flow-step-value-row visible';
 
-        const valueLabel = document.createElement('label');
-        if (step.action === 'select') valueLabel.textContent = 'Option / Value';
-        else if (step.action === 'wait') valueLabel.textContent = 'Wait Text / Selector';
-        else if (step.action === 'download') valueLabel.textContent = 'Filename Template';
-        else valueLabel.textContent = 'Text / Value';
-        valueRow.appendChild(valueLabel);
+          const valueLabel = document.createElement('label');
+          valueLabel.textContent = meta.valueLabel || 'Value';
+          valueRow.appendChild(valueLabel);
 
         const valueContainer = document.createElement('div');
         valueContainer.className = 'flow-step-value-container';
@@ -1972,7 +2336,6 @@ export function buildDashboardHtml(): string {
           renderSelectValueControls(valueContainer, valueInput, step, index);
         }
 
-        card.appendChild(valueRow);
         flowStepsList.appendChild(card);
       });
 
@@ -2060,6 +2423,7 @@ export function buildDashboardHtml(): string {
       initializeSelectMetadata(newStep);
       flowSteps.push(newStep);
 
+      ensureStepDefaults(flowSteps[flowSteps.length - 1]);
       renderFlowSteps();
       updateStatus('Element added to flow builder.');
     }
@@ -2219,11 +2583,45 @@ export function buildDashboardHtml(): string {
         }
 
         if (response && response.ok) {
+          const successQuerySummary = getStepMeta(step.action)?.outputKey === 'querySummary'
+            ? 'Verification succeeded.'
+            : (getStepMeta(step.action)?.category === 'action'
+              ? 'Action executed successfully.'
+              : stepOutputState.querySummary);
+          const successScrapeSummary = getStepMeta(step.action)?.outputKey === 'scrapeSummary'
+            ? 'Scrape request submitted.'
+            : stepOutputState.scrapeSummary;
+          updateStepOutputState({
+            stepIndex: index,
+            step,
+            status: 'pass',
+            pass: true,
+            message: 'Executed via ' + executionMode + ' mode.',
+            querySummary: successQuerySummary,
+            scrapeSummary: successScrapeSummary
+          });
           updateStatus(
             'Step ' + (index + 1) + ' (' + step.action + ') executed successfully via ' + executionMode + ' mode.'
           );
           return true;
         } else {
+          const failureQuerySummary = getStepMeta(step.action)?.outputKey === 'querySummary'
+            ? 'Verification failed.'
+            : (getStepMeta(step.action)?.category === 'action'
+              ? 'Action execution failed.'
+              : stepOutputState.querySummary);
+          const failureScrapeSummary = getStepMeta(step.action)?.outputKey === 'scrapeSummary'
+            ? 'Scrape failed.'
+            : stepOutputState.scrapeSummary;
+          updateStepOutputState({
+            stepIndex: index,
+            step,
+            status: 'fail',
+            pass: false,
+            message: (response && response.error) || 'Unknown step error',
+            querySummary: failureQuerySummary,
+            scrapeSummary: failureScrapeSummary
+          });
           updateStatus(
             'Step ' + (index + 1) + ' (' + step.action + ') failed: ' + ((response && response.error) || 'Unknown error'),
             true
@@ -2232,6 +2630,23 @@ export function buildDashboardHtml(): string {
         }
       } catch (error) {
         console.error('API call failed:', error);
+        const failureQuerySummary = getStepMeta(step.action)?.outputKey === 'querySummary'
+          ? 'Verification failed.'
+          : (getStepMeta(step.action)?.category === 'action'
+            ? 'Action execution failed.'
+            : stepOutputState.querySummary);
+        const failureScrapeSummary = getStepMeta(step.action)?.outputKey === 'scrapeSummary'
+          ? 'Scrape failed.'
+          : stepOutputState.scrapeSummary;
+        updateStepOutputState({
+          stepIndex: index,
+          step,
+          status: 'fail',
+          pass: false,
+          message: error.message || 'API error',
+          querySummary: failureQuerySummary,
+          scrapeSummary: failureScrapeSummary
+        });
         updateStatus('API error for step ' + (index + 1) + ': ' + error.message, true);
         return false;
       } finally {
@@ -2277,7 +2692,7 @@ export function buildDashboardHtml(): string {
         const response = await apiCall('POST', '/browser/run-flow', {
           sessionId: currentSessionId,
           startUrl,
-          steps: flowSteps
+          steps: flowSteps.filter((step) => isStepExecutable(step))
         });
 
         await refreshAllState();
@@ -2317,6 +2732,7 @@ export function buildDashboardHtml(): string {
     function updateFlowStepValue(index, value) {
       if (flowSteps[index]) {
         flowSteps[index].value = value;
+        scheduleStepEditRefresh();
       }
     }
 
@@ -2342,6 +2758,20 @@ export function buildDashboardHtml(): string {
         delete flowSteps[index]._selectOptionsError;
       }
       renderFlowSteps();
+      scheduleStepEditRefresh();
+    }
+
+    function updateFlowStepConfig(index, key, value, rerender = false) {
+      const step = flowSteps[index];
+      if (!step) return;
+      if (!step.config || typeof step.config !== 'object') {
+        step.config = {};
+      }
+      step.config[key] = value;
+      if (rerender) {
+        renderFlowSteps();
+      }
+      scheduleStepEditRefresh();
     }
 
     function moveFlowStep(index, direction) {
@@ -2888,6 +3318,15 @@ export function buildDashboardHtml(): string {
         editingRecipeId = null;
         renderFlowSteps();
         updateFlowBuilderTitle();
+        updateStepOutputState({
+          stepIndex: null,
+          step: null,
+          status: 'idle',
+          pass: null,
+          message: 'No step run yet.',
+          querySummary: 'No query executed yet.',
+          scrapeSummary: 'No scrape executed yet.'
+        });
         updateStatus('Flow cleared. Ready for a new flow.');
       });
     }
@@ -2945,6 +3384,17 @@ export function buildDashboardHtml(): string {
       }
     });
 
+    if (flowStepToolbox) {
+      flowStepToolbox.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLButtonElement)) return;
+        const category = target.dataset.stepCategory;
+        const action = target.dataset.stepAction;
+        if (!category || !action) return;
+        addManualStep(category, action);
+      });
+    }
+
     flowStepsList.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -2974,6 +3424,16 @@ export function buildDashboardHtml(): string {
         }
         return;
       }
+
+       if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.classList.contains('flow-step-config-input')) {
+         const rawIndex = target.dataset.stepIndex;
+         const index = typeof rawIndex === 'string' ? parseInt(rawIndex, 10) : -1;
+         const configKey = target.dataset.configKey;
+         if (configKey && Number.isInteger(index) && index >= 0) {
+           updateFlowStepConfig(index, configKey, target.value, false);
+         }
+         return;
+       }
     });
 
     flowStepsList.addEventListener('change', (event) => {
@@ -3012,6 +3472,8 @@ export function buildDashboardHtml(): string {
       appendCenteredMessage(sessionsList, 'Loading sessions...', '#64748b');
       appendCenteredMessage(healthPanel, 'Loading health data...', '#64748b');
       setScreenshotPlaceholder('Screenshot will appear here after session start or action.');
+      renderStepOutputPanel();
+      renderFlowStepToolbox();
       updateFlowButtons();
 
       await fetchMemory();
