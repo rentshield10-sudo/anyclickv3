@@ -1,15 +1,21 @@
 [
   {
+    "id": "flow_1776996361867_nxr811",
+    "version": 1,
+    "source_flow_id": null,
     "site": "my.quo.com",
     "pageType": "compose",
-    "intent": "primary_send_message",
+    "intent": "Flow: click 🚗Primary(201) 350-1990",
+    "variables": {},
     "fingerprint": {
       "title": "🚗 Primary | Quo",
-      "headings": [],
-      "pathPattern": "/inbox/PNAO2aXSml/c/CN35918c03730a4333ba9420fe60800c1d"
+      "headings": [
+        "Notes"
+      ],
+      "pathPattern": "/inbox/PNAO2aXSml/c/CN3effabfa77a0490482992b1b8f9cf325"
     },
-    "startUrl": "https://my.quo.com/inbox/PNAO2aXSml/c/CN35918c03730a4333ba9420fe60800c1d",
-    "generatedScript": "const { chromium } = require('playwright');\\n\\n(async () => {\\n  const browser = await chromium.launch({ headless: false });\\n  const page = await browser.newPage();\\n  await page.goto('https://my.quo.com/inbox/PNAO2aXSml/c/CN35918c03730a4333ba9420fe60800c1d', { waitUntil: 'domcontentloaded' });\\n  await page.locator('[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")').first().click();\\n  await page.locator('button[aria-label=\"Send a message\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('button[aria-label=\"Send a message\"]').first().click();\\n  await page.locator('input[aria-label=\"participant input\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('input[aria-label=\"participant input\"]').first().fill('+19179982343');\\n  await page.locator('div[aria-label=\"message input\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('div[aria-label=\"message input\"]').first().fill('test400');\\n  await page.locator('button[aria-label=\"Send message\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('button[aria-label=\"Send message\"]').first().click();\\n  // await browser.close();\\n})();",
+    "startUrl": "https://my.quo.com/inbox/PNAO2aXSml/c/CN3effabfa77a0490482992b1b8f9cf325",
+    "generatedScript": "const { chromium } = require('playwright');\\n\\n(async () => {\\n  const browser = await chromium.launch({ headless: false });\\n  const page = await browser.newPage();\\n  await page.goto('https://my.quo.com/inbox/PNAO2aXSml/c/CN3effabfa77a0490482992b1b8f9cf325', { waitUntil: 'domcontentloaded' });\\n  await page.locator('[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")').first().click();\\n  await page.locator('button[aria-label=\"Send a message\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('button[aria-label=\"Send a message\"]').first().click();\\n  await page.locator('input[aria-label=\"participant input\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('input[aria-label=\"participant input\"]').first().fill('');\\n  await page.locator('div[aria-label=\"message input\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('div[aria-label=\"message input\"]').first().fill('');\\n  await page.locator('button[aria-label=\"Send message\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('button[aria-label=\"Send message\"]').first().click();\\n  // await browser.close();\\n})();",
     "locators": [
       {
         "kind": "css",
@@ -18,7 +24,7 @@
         "role": "link",
         "tag": "button",
         "type": "button",
-        "elementId": 10,
+        "elementId": 32,
         "priority": 0,
         "confidence": 0.8,
         "action": "click",
@@ -31,7 +37,7 @@
         "label": "Send a message",
         "tag": "button",
         "type": "button",
-        "elementId": 22,
+        "elementId": 41,
         "priority": 1,
         "confidence": 0.8,
         "action": "click",
@@ -40,15 +46,16 @@
       {
         "kind": "css",
         "selector": "input[aria-label=\"participant input\"]",
-        "role": "input",
+        "role": "combobox",
         "label": "participant input",
         "tag": "input",
         "type": "input",
-        "elementId": 46,
+        "elementId": 81,
         "priority": 2,
         "confidence": 0.8,
         "action": "type",
-        "value": "+19179982343"
+        "value": "",
+        "variableName": "phone"
       },
       {
         "kind": "css",
@@ -57,11 +64,12 @@
         "label": "message input",
         "tag": "div",
         "type": "contenteditable",
-        "elementId": 1,
+        "elementId": 111,
         "priority": 3,
         "confidence": 0.8,
         "action": "type",
-        "value": "test400"
+        "value": "",
+        "variableName": "message"
       },
       {
         "kind": "css",
@@ -70,7 +78,7 @@
         "label": "Send message",
         "tag": "button",
         "type": "button",
-        "elementId": 97,
+        "elementId": 113,
         "priority": 4,
         "confidence": 0.8,
         "action": "click",
@@ -85,102 +93,9 @@
       "Send message"
     ],
     "confidence": 0.8,
-    "lastSuccessAt": "2026-04-06T07:20:42.607Z",
+    "lastSuccessAt": "2026-04-24T02:06:01.862Z",
     "successCount": 1,
     "failureCount": 0,
-    "stale": false,
-    "id": "recipe_1775094629339_ttw5vj"
-  },
-  {
-    "site": "my.quo.com",
-    "pageType": "compose",
-    "intent": "confirmation_send_message",
-    "fingerprint": {
-      "title": "🚗 Primary | Quo",
-      "headings": [],
-      "pathPattern": "/inbox/PNAO2aXSml/c/CN35918c03730a4333ba9420fe60800c1d"
-    },
-    "startUrl": "https://my.quo.com/inbox/PNAO2aXSml/c/CN35918c03730a4333ba9420fe60800c1d",
-    "generatedScript": "const { chromium } = require('playwright');\\n\\n(async () => {\\n  const browser = await chromium.launch({ headless: false });\\n  const page = await browser.newPage();\\n  await page.goto('https://my.quo.com/inbox/PNAO2aXSml/c/CN35918c03730a4333ba9420fe60800c1d', { waitUntil: 'domcontentloaded' });\\n  await page.locator('[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")').first().click();\\n  await page.locator('button[aria-label=\"Send a message\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('button[aria-label=\"Send a message\"]').first().click();\\n  await page.locator('input[aria-label=\"participant input\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('input[aria-label=\"participant input\"]').first().fill('+19179982343');\\n  await page.locator('div[aria-label=\"message input\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('div[aria-label=\"message input\"]').first().fill('test400');\\n  await page.locator('button[aria-label=\"Send message\"]').first().scrollIntoViewIfNeeded().catch(() => {});\\n  await page.locator('button[aria-label=\"Send message\"]').first().click();\\n  // await browser.close();\\n})();",
-    "locators": [
-      {
-        "kind": "css",
-        "selector": "[role=\"link\"]:has-text(\"🚗Primary(201) 350-1990\")",
-        "text": "🚗Primary(201) 350-1990",
-        "role": "link",
-        "tag": "button",
-        "type": "button",
-        "elementId": 10,
-        "priority": 0,
-        "confidence": 0.8,
-        "action": "click",
-        "value": ""
-      },
-      {
-        "kind": "css",
-        "selector": "button[aria-label=\"Send a message\"]",
-        "role": "button",
-        "label": "Send a message",
-        "tag": "button",
-        "type": "button",
-        "elementId": 22,
-        "priority": 1,
-        "confidence": 0.8,
-        "action": "click",
-        "value": ""
-      },
-      {
-        "kind": "css",
-        "selector": "input[aria-label=\"participant input\"]",
-        "role": "input",
-        "label": "participant input",
-        "tag": "input",
-        "type": "input",
-        "elementId": 46,
-        "priority": 2,
-        "confidence": 0.8,
-        "action": "type",
-        "value": "+19179982343"
-      },
-      {
-        "kind": "css",
-        "selector": "div[aria-label=\"message input\"]",
-        "role": "textbox",
-        "label": "message input",
-        "tag": "div",
-        "type": "contenteditable",
-        "elementId": 1,
-        "priority": 3,
-        "confidence": 0.8,
-        "action": "type",
-        "value": "test400"
-      },
-      {
-        "kind": "css",
-        "selector": "button[aria-label=\"Send message\"]",
-        "role": "button",
-        "label": "Send message",
-        "tag": "button",
-        "type": "button",
-        "elementId": 97,
-        "priority": 4,
-        "confidence": 0.8,
-        "action": "click",
-        "value": ""
-      }
-    ],
-    "fallbackTexts": [
-      "🚗Primary(201) 350-1990",
-      "Send a message",
-      "participant input",
-      "message input",
-      "Send message"
-    ],
-    "confidence": 0.8,
-    "lastSuccessAt": "2026-04-06T07:20:42.607Z",
-    "successCount": 0,
-    "failureCount": 0,
-    "stale": false,
-    "id": "flow_1775492695207_wu9pdq"
+    "stale": false
   }
 ]

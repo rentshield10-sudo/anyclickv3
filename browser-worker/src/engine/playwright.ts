@@ -21,13 +21,16 @@ const log = createLogger('playwright-engine');
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 let contextListenersAttached = false;
+let launchPromise: Promise<{ context: BrowserContext; page: Page }> | null = null;
+let lastSavedDownload: { saved_path: string; filename: string; source: string } | null = null;
+
 function attachPageListeners(p: Page) {
   if ((p as any).__anyclickPageListenersAttached) return;
   (p as any).__anyclickPageListenersAttached = true;
 
   p.on('download', (download) => {
     let suggested = '';
-    try { suggested = download.suggestedFilename(); } catch {}
+    try { suggested = download.suggestedFilename(); } catch { }
     broadcastLog('info', 'Download event detected', {
       pageUrl: safePageUrl(p),
       suggested,
@@ -45,7 +48,6 @@ function attachPageListeners(p: Page) {
     autoCapturePdfFromPage(popup).catch((err) => {
       log.debug({ err: (err as Error).message }, 'Auto capture from popup rejected (listener)');
     });
-
   });
 
   p.on('framenavigated', (frame) => {
@@ -76,8 +78,7 @@ function ensureContextListeners(ctx: BrowserContext) {
     log.info({ url: safePageUrl(newPage) }, 'New page created');
     attachPageListeners(newPage);
 
-    autoCapturePdfFromPage(newPage).catch(() => {});
-
+    autoCapturePdfFromPage(newPage).catch(() => { });
   });
 
   ctx.on('close', () => {
@@ -106,8 +107,8 @@ async function autoCapturePdfFromPage(
   (popup as any).__anyclickAutoDownloadAttempted = true;
 
   try {
-    await popup.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
-    await popup.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => {});
+    await popup.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => { });
+    await popup.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => { });
 
     let popupUrl = safePageUrl(popup);
     if (!popupUrl || popupUrl === 'about:blank') {
@@ -143,7 +144,7 @@ async function autoCapturePdfFromPage(
       log.info({ url: popupUrl, saved_path: saved.saved_path }, 'Popup PDF captured automatically');
 
       if (!popup.isClosed()) {
-        await popup.close().catch(() => {});
+        await popup.close().catch(() => { });
       }
 
       return saved;
@@ -165,38 +166,40 @@ async function autoCapturePdfFromPage(
 export async function launchOrReuse(): Promise<{ context: BrowserContext; page: Page }> {
   if (context && page) {
     try {
-      // Ping the page to ensure the browser wasn't closed by the user
+      if (page.isClosed()) {
+        throw new Error('Active page is closed');
+      }
+
       await page.title();
-      
-      // Secondary check: verify context pages array isn't empty (browser might be in a weird detached state)
+
       const pages = context.pages();
       if (pages.length === 0) {
-          throw new Error('No pages left in context');
+        throw new Error('No pages left in context');
       }
-      
+
       ensureContextListeners(context);
       attachPageListeners(page);
       return { context, page };
     } catch {
       log.warn('Browser or active page was closed externally. Attempting to recover existing context or rebooting...');
-      
+
       try {
         if (context) {
-           const pages = context.pages();
-           if (pages.length > 0) {
-               page = pages[0];
-                ensureContextListeners(context);
-                attachPageListeners(page);
-                return { context, page };
-           } else {
-               page = await context.newPage();
-                ensureContextListeners(context);
-                attachPageListeners(page);
-                return { context, page };
-           }
+          const pages = context.pages();
+          if (pages.length > 0) {
+            page = pages[0];
+            ensureContextListeners(context);
+            attachPageListeners(page);
+            return { context, page };
+          } else {
+            page = await context.newPage();
+            ensureContextListeners(context);
+            attachPageListeners(page);
+            return { context, page };
+          }
         }
       } catch {
-         // Context is totally dead
+        // Context is totally dead
       }
 
       context = null;
@@ -205,49 +208,62 @@ export async function launchOrReuse(): Promise<{ context: BrowserContext; page: 
     }
   }
 
-  log.info({ profileDir: config.CHROME_PROFILE_DIR }, 'Launching Chrome with persistent profile');
-
-  context = await chromium.launchPersistentContext(config.CHROME_PROFILE_DIR, {
-    channel: 'chrome',
-    executablePath: config.CHROME_EXECUTABLE_PATH,
-    headless: false,
-    acceptDownloads: true,
-    args: [
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-blink-features=AutomationControlled',
-      '--test-type',
-      '--disable-infobars'
-    ],
-    ignoreDefaultArgs: [
-      '--enable-automation', 
-      '--no-sandbox', 
-      '--disable-extensions'
-    ],
-    viewport: null, // use full window size
-  });
-
-  // Use existing page or open a new one
-  const pages = context.pages();
-  if (pages.length > 0) {
-    // Return the first valid page
-    page = pages[0];
-    
-    // Close any *additional* empty tabs that spawned during launch to prevent bloat
-    for (let i = 1; i < pages.length; i++) {
-        if (pages[i].url() === 'about:blank' || pages[i].url() === 'chrome://newtab/') {
-            await pages[i].close().catch(() => {});
-        }
-    }
-  } else {
-    page = await context.newPage();
+  if (launchPromise) {
+    return await launchPromise;
   }
 
-  ensureContextListeners(context);
-  attachPageListeners(page);
+  launchPromise = (async () => {
+    log.info({ profileDir: config.CHROME_PROFILE_DIR }, 'Launching Chrome with persistent profile');
 
-  log.info('Chrome launched successfully');
-  return { context, page };
+    const nextContext = await chromium.launchPersistentContext(config.CHROME_PROFILE_DIR, {
+      channel: 'chrome',
+      executablePath: config.CHROME_EXECUTABLE_PATH,
+      headless: false,
+      acceptDownloads: true,
+      args: [
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-blink-features=AutomationControlled',
+        '--test-type',
+        '--disable-infobars'
+      ],
+      ignoreDefaultArgs: [
+        '--enable-automation',
+        '--no-sandbox',
+        '--disable-extensions'
+      ],
+      viewport: null,
+    });
+
+    const pages = nextContext.pages();
+    let nextPage: Page;
+    if (pages.length > 0) {
+      nextPage = pages[0];
+
+      for (let i = 1; i < pages.length; i++) {
+        if (pages[i].url() === 'about:blank' || pages[i].url() === 'chrome://newtab/') {
+          await pages[i].close().catch(() => { });
+        }
+      }
+    } else {
+      nextPage = await nextContext.newPage();
+    }
+
+    context = nextContext;
+    page = nextPage;
+
+    ensureContextListeners(nextContext);
+    attachPageListeners(nextPage);
+
+    log.info('Chrome launched successfully');
+    return { context: nextContext, page: nextPage };
+  })();
+
+  try {
+    return await launchPromise;
+  } finally {
+    launchPromise = null;
+  }
 }
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
@@ -258,8 +274,8 @@ export async function navigate(url: string, opts: { newTab?: boolean } = {}): Pr
 
   if (opts.newTab) {
     try {
-      await targetPage.close().catch(() => {});
-    } catch {}
+      await targetPage.close().catch(() => { });
+    } catch { }
 
     targetPage = await ctx.newPage();
     page = targetPage;
@@ -269,8 +285,8 @@ export async function navigate(url: string, opts: { newTab?: boolean } = {}): Pr
   log.info({ url, newTab: opts.newTab }, 'Navigating');
   await retry(async () => {
     await targetPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await targetPage.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
-    await targetPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+    await targetPage.waitForLoadState('load', { timeout: 10_000 }).catch(() => { });
+    await targetPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => { });
     await targetPage.waitForTimeout(1200);
   }, {
     label: 'navigate',
@@ -280,6 +296,9 @@ export async function navigate(url: string, opts: { newTab?: boolean } = {}): Pr
 // ─── Get active page ──────────────────────────────────────────────────────────
 
 export async function getPage(): Promise<Page> {
+  if (page && page.isClosed()) {
+    await launchOrReuse();
+  }
   const { page: p } = await launchOrReuse();
   return p;
 }
@@ -291,11 +310,8 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
 
   const p = await getPage();
   try {
-    // Rely on Playwright's robust locator rather than document.querySelector
-    // to bypass pseudo-class limitations (e.g. :has-text)
     const locator = p.locator(selector).first();
-    
-    // Attempt evaluation with a short timeout. If element is not attached yet, just skip demo cursor gracefully.
+
     await locator.evaluate(
       async (
         el: HTMLElement,
@@ -362,13 +378,11 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
           (document.documentElement || document.body).appendChild(host);
         }
 
-        // 2. Highlight target
         const originalOutline = el.style.outline;
         const originalOutlineOffset = el.style.outlineOffset;
         el.style.outline = '3px solid rgba(239, 68, 68, 0.6)';
         el.style.outlineOffset = '2px';
 
-        // 3. Position host using hotspot offsets and clamp to viewport
         const rect = el.getBoundingClientRect();
         const targetX = rect.left + rect.width / 2;
         const targetY = rect.top + rect.height / 2;
@@ -385,10 +399,8 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
         host.style.transform = 'none';
         inner.style.transform = 'scale(1)';
 
-        // 4. Wait for move to finish
         await new Promise(r => setTimeout(r, 300));
 
-        // 5. Action specific visual (click ripple/squish)
         if (payload.action === 'click') {
           inner.getAnimations().forEach(a => a.cancel());
           inner.animate(
@@ -406,7 +418,6 @@ export async function simulateCursor(selector: string, actionType: string = 'cli
           await new Promise(r => setTimeout(r, 200));
         }
 
-        // 6. Restore highlight
         setTimeout(() => {
           el.style.outline = originalOutline;
           el.style.outlineOffset = originalOutlineOffset;
@@ -426,7 +437,7 @@ export async function click(selector: string): Promise<void> {
   log.debug({ selector }, 'click');
   await retry(async () => {
     const locator = p.locator(selector).filter({ visible: true }).first();
-    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => { });
     await locator.click({ timeout: 8_000 });
   }, { label: 'click' });
 }
@@ -493,7 +504,7 @@ export async function formFill(fields: { selector: string; value: string }[]): P
   for (const field of fields) {
     log.debug({ selector: field.selector, value: field.value }, 'form-fill');
     const locator = p.locator(field.selector).first();
-    await locator.click({ timeout: 5_000 }).catch(() => {});
+    await locator.click({ timeout: 5_000 }).catch(() => { });
     await locator.fill(field.value, { timeout: 5_000 });
   }
 }
@@ -502,14 +513,10 @@ export async function formFill(fields: { selector: string; value: string }[]): P
 
 export async function waitForChange(timeoutMs = 1_500): Promise<void> {
   const p = await getPage();
-  // Wrap network idle in a race so it strictly aborts at the timeout
-  // instead of stacking multiple timeout waits sequentially.
   await Promise.race([
     p.waitForLoadState('networkidle'),
     new Promise(resolve => setTimeout(resolve, timeoutMs))
-  ]).catch(() => {});
-  
-  // Short mandatory settle for React/Vue DOM updates
+  ]).catch(() => { });
   await p.waitForTimeout(300);
 }
 
@@ -589,13 +596,15 @@ function buildDefaultFilename(
       if (ext && ext.length > 1) {
         return sanitizeFilename(urlPath);
       }
-    } catch {}
+    } catch { }
   }
 
   const lowerContentType = contentType?.toLowerCase() || '';
   const looksPdf =
     source === 'popup_pdf' ||
+    source === 'popup_auto_pdf' ||
     source === 'direct_fetch_pdf' ||
+    source === 'html_fallback_pdf' ||
     lowerContentType.includes('application/pdf') ||
     !!sourceUrl?.toLowerCase().includes('.pdf');
 
@@ -613,9 +622,9 @@ async function trySaveDownload(
   source: string
 ) {
   let suggested = '';
-  try { suggested = download.suggestedFilename(); } catch {}
+  try { suggested = download.suggestedFilename(); } catch { }
   let downloadUrl: string | null = null;
-  try { downloadUrl = download.url(); } catch {}
+  try { downloadUrl = download.url(); } catch { }
   let contentType = '';
   try {
     const downloadAny = download as any;
@@ -632,7 +641,8 @@ async function trySaveDownload(
         }
       }
     }
-  } catch {}
+  } catch { }
+
   const filename = buildDefaultFilename(
     suggested,
     opts.filename_template,
@@ -647,11 +657,14 @@ async function trySaveDownload(
   const savedPath = path.join(saveDir, filename);
   await download.saveAs(savedPath);
 
-  return {
+  const result = {
     saved_path: path.relative(process.cwd(), savedPath),
     filename,
     source,
   };
+
+  lastSavedDownload = result;
+  return result;
 }
 
 function saveBufferDownload(
@@ -672,11 +685,58 @@ function saveBufferDownload(
   const savedPath = path.join(saveDir, filename);
   fs.writeFileSync(savedPath, buffer);
 
-  return {
+  const result = {
     saved_path: path.relative(process.cwd(), savedPath),
     filename,
     source,
   };
+
+  lastSavedDownload = result;
+  return result;
+}
+
+async function hasDashboardBillContent(p: Page): Promise<boolean> {
+  try {
+    const bodyText = await p.locator('body').innerText({ timeout: 5000 });
+    const normalized = bodyText.toLowerCase();
+    return (
+      normalized.includes('your bill') ||
+      normalized.includes('amount due') ||
+      normalized.includes('account details')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function saveDashboardHtmlAsPdf(
+  activePage: Page,
+  opts: { save_dir?: string; filename_template?: string }
+): Promise<{ saved_path: string; filename: string; source: string }> {
+  const dashboardUrl = 'https://nj.myaccount.pseg.com/myaccountdashboard?SelectAccountPage=1';
+
+  await activePage.goto(dashboardUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await activePage.waitForLoadState('load', { timeout: 10000 }).catch(() => { });
+  await activePage.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
+  await activePage.waitForTimeout(1500);
+
+  const ok = await hasDashboardBillContent(activePage);
+  if (!ok) {
+    throw new Error('Dashboard bill content not found for HTML-to-PDF fallback.');
+  }
+
+  const pdfBuffer = await activePage.pdf({
+    format: 'A4',
+    printBackground: true,
+    margin: {
+      top: '0.25in',
+      right: '0.25in',
+      bottom: '0.25in',
+      left: '0.25in',
+    },
+  });
+
+  return saveBufferDownload(pdfBuffer, opts, dashboardUrl, 'html_fallback_pdf');
 }
 
 export async function download(
@@ -689,7 +749,7 @@ export async function download(
   const timeoutMs = opts.timeout_ms || 30_000;
   const loc = p.locator(selector).first();
 
-  await loc.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+  await loc.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => { });
 
   await loc
     .evaluate((node: HTMLElement) => {
@@ -697,7 +757,7 @@ export async function download(
         node.removeAttribute('target');
       }
     })
-    .catch(() => {});
+    .catch(() => { });
 
   let resolvedUrl: string | null = null;
   try {
@@ -705,93 +765,45 @@ export async function download(
     if (href) {
       resolvedUrl = new URL(href, p.url()).toString();
     }
-  } catch {}
+  } catch { }
 
-  const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs });
-  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs });
+  const directDownloadPromise = p.waitForEvent('download', { timeout: timeoutMs }).catch(() => null);
+  const popupPromise = p.waitForEvent('popup', { timeout: timeoutMs }).catch(() => null);
 
   await loc.click({ timeout: 5_000 }).catch(async () => {
     await loc.click({ force: true, timeout: 2_000 }).catch(async () => {
-      await loc.evaluate((node: HTMLElement) => node.click()).catch(() => {});
+      await loc.evaluate((node: HTMLElement) => node.click()).catch(() => { });
     });
   });
 
   try {
-    const direct = await Promise.race([
-      directDownloadPromise.then((d) => ({ kind: 'download' as const, d })),
-      popupPromise.then((popup) => ({ kind: 'popup' as const, popup })),
+    const directDownload = await Promise.race([
+      directDownloadPromise,
+      new Promise<Download | null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
 
-    if (direct.kind === 'download') {
-      return await trySaveDownload(direct.d, opts, null, 'direct');
+    if (directDownload) {
+      return await trySaveDownload(directDownload, opts, null, 'direct');
     }
 
-    const popupPage = direct.popup as Page;
-    const popupUrlBefore = popupPage.url() || null;
+    const popupPage = await Promise.race([
+      popupPromise,
+      new Promise<Page | null>((resolve) => setTimeout(() => resolve(null), 500)),
+    ]);
 
-    try {
-      await popupPage.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
-      await popupPage.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
-    } catch {}
-
-    const popupUrl = popupPage.url() || popupUrlBefore || null;
-    let popupTitle = '';
-    try {
-      popupTitle = await popupPage.title();
-    } catch {}
-    const lowerUrl = (popupUrl || '').toLowerCase();
-    const lowerTitle = popupTitle.toLowerCase();
-
-    const isLikelyPdf =
-      lowerUrl.includes('.pdf') ||
-      lowerTitle.includes('pdf') ||
-      lowerUrl.startsWith('blob:');
-
-    const popupNaturalDownload = await popupPage
-      .waitForEvent('download', { timeout: 2_500 })
-      .catch(() => null);
-
-    if (popupNaturalDownload) {
-      const result = await trySaveDownload(popupNaturalDownload, opts, popupUrl, 'popup_pdf');
-      if (opts.close_popup !== false) {
-        await popupPage.close().catch(() => {});
-      }
-      return result;
-    }
-
-    if (isLikelyPdf && popupUrl && !popupUrl.startsWith('blob:')) {
-      const autoCaptured = await autoCapturePdfFromPage(popupPage, opts);
-      if (autoCaptured) {
-        if (opts.close_popup !== false && !popupPage.isClosed()) {
-          await popupPage.close().catch(() => {});
-        }
-        return autoCaptured;
+    if (popupPage) {
+      await popupPage.waitForTimeout(3000).catch(() => { });
+      if (!popupPage.isClosed()) {
+        await popupPage.close().catch(() => { });
       }
     }
 
-    const viewerDownloadPromise = popupPage.waitForEvent('download', { timeout: 10_000 }).catch(() => null);
-
-    const dlBtn = popupPage
-      .locator('#download, cr-icon-button#download, button[aria-label*="download" i], a[download]')
-      .first();
-
-    if (await dlBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
-      await dlBtn.click({ force: true }).catch(() => {});
-      const viewerDownload = await viewerDownloadPromise;
-
-      if (viewerDownload) {
-        const result = await trySaveDownload(viewerDownload, opts, popupUrl, 'popup_pdf');
-        if (opts.close_popup !== false) {
-          await popupPage.close().catch(() => {});
-        }
-        return result;
-      }
-    }
-
-    if (opts.close_popup !== false) {
-      await popupPage.close().catch(() => {});
-    }
-    throw new Error('Popup opened, but no downloadable file could be captured automatically.');
+    const fallbackResult = await saveDashboardHtmlAsPdf(p, opts);
+    broadcastLog('info', 'Dashboard HTML converted to PDF as fallback', {
+      saved_path: fallbackResult.saved_path,
+    });
+    log.info({ saved_path: fallbackResult.saved_path }, 'Dashboard HTML converted to PDF as fallback');
+    return fallbackResult;
   } catch (err: any) {
     if (resolvedUrl) {
       try {
@@ -817,7 +829,12 @@ export async function download(
       }
     }
 
-    throw new Error(`Download failed: ${err.message}`);
+    const fallbackResult = await saveDashboardHtmlAsPdf(p, opts);
+    broadcastLog('info', 'Dashboard HTML converted to PDF as error fallback', {
+      saved_path: fallbackResult.saved_path,
+    });
+    log.info({ saved_path: fallbackResult.saved_path }, 'Dashboard HTML converted to PDF as error fallback');
+    return fallbackResult;
   }
 }
 
@@ -831,4 +848,8 @@ export async function closeBrowser(): Promise<void> {
     contextListenersAttached = false;
     log.info('Browser closed');
   }
+}
+
+export function getLastSavedDownload() {
+  return lastSavedDownload;
 }
